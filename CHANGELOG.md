@@ -16,4 +16,5 @@ First release.
 - Quadrotor simulator: rigid-body dynamics, motor lag, wind, cascaded position and
   SE(3) attitude control, stabilised gimbal.
 - ArduPilot over MAVLink (GUIDED), integration-tested on ArduCopter 4.6.3 SITL in CI.
-- Monte Carlo benchmark, report plots and demo animation.
+- Monte Carlo benchmark, report plots, demo animation and a project video rendered from the
+  repository's own outputs (`docs/video/make_video.py`).

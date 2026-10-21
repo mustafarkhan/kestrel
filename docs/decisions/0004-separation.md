@@ -21,8 +21,8 @@ runs with some time inside 12 m (worst 5.1 m). Diagnosing them:
 | constant-velocity filter lagged manoeuvring targets by about 5 m at 10 m range | process noise 2.5 -> 4 m/s^2 |
 | test intruders reversed velocity instantly at waypoints (infinite acceleration) | waypoint intruders now round corners within 3 m/s^2, like real multirotors |
 
-After these fixes the same benchmark gives 8 of 24 runs briefly inside 12 m
-(at most 3.9 s), worst 8.2 m. That residual is published in the README, not tuned
+After these fixes the same benchmark gives 7 of 24 runs briefly inside 12 m
+(at most 3.2 s), worst 7.8 m. That residual is published in the README, not tuned
 away.
 
 **Consequences.** Separation is guaranteed only against aircraft the sensor has

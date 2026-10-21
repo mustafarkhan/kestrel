@@ -12,13 +12,17 @@ that no planner, learned or not, can get past.
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
+🎬 **[Project video (2 min)](docs/video/kestrel_demo.mp4)**: the instruction, the checked plan, a rejected unsafe plan,
+the closed-loop flight with a pixel-level view of the intruder, the same code flying ArduCopter SITL, and the measured
+results. Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
+
 | | how | measured |
 |---|---|---|
 | **Plan from language** | local LLM (Ollama) constrained to a JSON Schema, re-validated, one repair round, deterministic fallback; stop/abort/land bypass the model | malformed, invented-site and garbage outputs all rejected in tests; same plan with or without a model |
-| **Check before flight** | geofence, altitude band, speed, standoff vs. separation, battery energy | estimate vs. flown energy: 0.92 (median, benchmark) |
+| **Check before flight** | geofence, altitude band, speed, standoff vs. separation, battery energy | flown / estimated energy: 0.92 (median, benchmark) |
 | **See other aircraft** | small-target sky detector on rendered frames: black top-hat, robust threshold, horizon mask, darker-than-sky test | ~80% of frames detected out to 60 m on 2-7 px targets; 0 false alarms in 160 random cloudy-sky frames |
-| **Track them** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.4 m median / 5.0 m p90 position error at ~30 m range |
-| **Observe safely** | standoff guidance from below (target against sky), parallax orbit, stabilised gimbal, contact watch, escape velocity | intruder in view 100% of shadowing time; median-run closest approach 13.4 m (limit 12 m); see [Results](#results) for the runs that went inside it |
+| **Track them** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.5 m median / 5.2 m p90 position error at ~30 m range |
+| **Observe safely** | standoff guidance from below (target against sky), parallax orbit, stabilised gimbal, contact watch, escape velocity | intruder in view 100% of shadowing time; median-run closest approach 13.3 m (limit 12 m); see [Results](#results) for the runs that went inside it |
 | **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink) | full mission flown on **ArduCopter 4.6.3 SITL in CI** |
 
 > **Status (October 2026, v0.1).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
@@ -78,19 +82,20 @@ A Monte Carlo benchmark flies the same mission (survey, shadow any contact for 4
 
 | metric | result |
 |---|---|
-| missions completed and landed (all within 1.5 m of home) | 24/24 |
+| missions completed and landed (all within 0.2 m of home) | 24/24 |
 | runs where a contact was detected and shadowed | 23/24 |
-| runs with any time inside the 12 m minimum separation | 8/24, each for at most 3.9 s |
-| closest approach over all runs (median run) | 8.2 m (13.4 m) |
-| track position error while shadowing, median of runs (p90 of runs) | 4.4 m (5.0 m) |
+| runs with any time inside the 12 m minimum separation | 7/24, each for at most 3.2 s |
+| closest approach over all runs (median run) | 7.8 m (13.3 m) |
+| track position error while shadowing, median of runs (p90 of runs) | 4.5 m (5.2 m) |
 | intruder inside the camera frame while shadowing (median run) | 100% |
 | false tracks per run (median) | 3 |
 | flown energy / pre-flight estimate (median) | 0.92 |
 
-**About the 8 runs that went inside 12 m.** The closest approaches were 8.2, 9.5, 9.5, 10.0, 10.7, 11.1, 11.4 and
-11.8 m, none longer than 3.9 s and none a collision. In seven, the intruder was being tracked; six of those involved
+**About the 7 runs that went inside 12 m.** The closest approaches were 7.8, 9.6, 9.7, 10.0, 10.4, 11.4 and
+11.9 m, none longer than 3.2 s and none a collision. In six, the intruder was being tracked, and all six involved
 intruders at 4.1-5.4 m/s, the fast end of the tested range, where an intruder turning towards the observer closes
-faster than the observer can open the gap. In the eighth, the intruder passed beside the observer outside the camera's view and was never detected.
+faster than the observer can open the gap. In the seventh, the intruder passed beside the observer outside the
+camera's view and was never detected.
 Diagnosing an earlier run of this benchmark (9 runs, worst 5.1 m) produced the escape-velocity and retreat-on-loss
 behaviours ([0004](docs/decisions/0004-separation.md)). The remaining gap is the next thing to work on, not something
 to tune away.
@@ -179,7 +184,8 @@ src/kestrel/
   vehicle/      Vehicle protocol, simulated vehicle, ArduPilot over MAVLink
   runtime.py    closed-loop simulation      live.py   real-time loop for MAVLink
   bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | fly
-docs/           architecture, safety case, decision records, published results
+docs/           architecture, safety case, decision records, published results, video and its renderer
+scripts/        record_sitl_flight.py: fly ArduCopter SITL and save the log the video uses
 scenarios/      world definitions (fence, sites, wind, intruders)
 tests/          unit, property, closed-loop and SITL tests
 ```
