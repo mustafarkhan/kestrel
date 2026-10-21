@@ -54,7 +54,7 @@ def sitl() -> Iterator[str]:
             DEFAULTS,
             "-I0",
             "--home",
-            "60.1699,24.9384,10,0",
+            "-35.363261,149.165230,584,353",
         ],
         cwd=workdir,
         stdout=subprocess.DEVNULL,
