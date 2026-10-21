@@ -25,19 +25,21 @@ _GROUND_B = np.array([104.0, 96.0, 70.0])
 _TARGET = np.array([42.0, 42.0, 46.0])
 
 
-def _fractal_noise(rng: np.random.Generator, shape: tuple[int, int], octaves: int = 5) -> Vec:
+def _fractal_noise(rng: np.random.Generator, shape: tuple[int, int], beta: float = 2.4) -> Vec:
+    """Fractal noise with a 1/f^beta spectrum, periodic in both axes.
+
+    Built in the frequency domain, so it wraps seamlessly: the cloud map's left and
+    right edges are the same azimuth, and a seam there would be a hard vertical edge
+    in the sky that the detector then has to cope with.
+    """
     h, w = shape
-    out = np.zeros(shape)
-    amp, total = 1.0, 0.0
-    aspect = max(1, w // h)
-    for o in range(octaves):
-        cells = (min(h, 4 * 2**o), min(w, 4 * aspect * 2**o))
-        grid = rng.standard_normal(cells)
-        zoom = (h / cells[0], w / cells[1])
-        out += amp * ndimage.zoom(grid, zoom, order=3, mode="grid-wrap")[:h, :w]
-        total += amp
-        amp *= 0.5
-    out /= total
+    fy = np.fft.fftfreq(h)[:, None] * h
+    fx = np.fft.fftfreq(w)[None, :] * h  # cycles per map height on both axes: isotropic pixels
+    k = np.sqrt(fx * fx + fy * fy)
+    amplitude = (1.0 + k * k) ** (-beta / 2) * np.exp(-((k / (0.35 * h)) ** 2))
+    amplitude[0, 0] = 0.0
+    spectrum = np.fft.fft2(rng.standard_normal(shape)) * amplitude
+    out = np.real(np.fft.ifft2(spectrum))
     return (out - out.mean()) / (out.std() + 1e-9)
 
 
