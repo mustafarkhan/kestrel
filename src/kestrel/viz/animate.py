@@ -62,7 +62,7 @@ def make_gif(
         d = ImageDraw.Draw(canvas)
         cam = Image.fromarray(fr.image).resize((CAM_W, CAM_H), Image.Resampling.NEAREST)
         canvas.paste(cam, (0, HEADER))
-        sx = CAM_W / fr.image.shape[1] / 2  # recorded frames are half resolution
+        sx = CAM_W / r.config.camera.width  # detections are in full-resolution pixels
         for det in fr.detections:
             x0, y0, x1, y1 = det.bbox
             d.rectangle(

@@ -131,6 +131,7 @@ def run(
     operator_commands: list[tuple[float, str]] | None = None,
     record_every: int = 0,
     perception_enabled: bool = True,
+    record_downsample: int = 2,
 ) -> RunResult:
     plan, report = plan_and_validate(command, cfg, scenario, backend)
     world = SimWorld(cfg, scenario)
@@ -189,7 +190,9 @@ def run(
                         tp.append((e.ident, uv[0], uv[1], e.confirmed))
                 truth = [uv[:2] for _, p, _ in intruders if (uv := perc.camera.project(true_pose, p))]
                 b = executive.current.name if executive.current else "idle"
-                log.frames.append(Frame(t, img[::2, ::2].copy(), dets, tp, truth, b))
+                log.frames.append(
+                    Frame(t, img[::record_downsample, ::record_downsample].copy(), dets, tp, truth, b)
+                )
         while pending and pending[0][0] <= t:
             _, stamp, dets, pose = pending.pop(0)
             perc.tracker.update(stamp, dets, pose)
