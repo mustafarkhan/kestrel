@@ -63,3 +63,6 @@ markers = [
   "slow: closed-loop simulations (minutes)",
   "sitl: needs an ArduCopter SITL binary (ARDUPILOT_SITL env var)",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"docs/video/*" = ["E501", "RUF001"]  # on-screen text: long strings, typographic ×
