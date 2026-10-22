@@ -133,10 +133,21 @@ class SafetyMonitor:
             d = pos - tr.pos
             dist = float(np.linalg.norm(d))
             if dist < need:
-                away = st.pos - tr.pos
-                n = d / dist if dist > 1e-6 else away / max(float(np.linalg.norm(away)), 1e-6)
-                pos = tr.pos + n * need
-                note("separation_push")
+                # Push horizontally and keep altitude: a multirotor has about 3x more horizontal
+                # than vertical speed authority, so moving along the 3-D line (downwards when
+                # the intruder is above) escapes on the weakest axis.
+                dz = float(d[2])
+                h_need = math.sqrt(max(need * need - dz * dz, 0.0))
+                hd = math.hypot(float(d[0]), float(d[1]))
+                if hd < h_need:
+                    if hd > 0.5:
+                        u_h = np.array([d[0], d[1], 0.0]) / hd
+                    else:
+                        away = st.pos - tr.pos
+                        ah = math.hypot(float(away[0]), float(away[1]))
+                        u_h = np.array([away[0], away[1], 0.0]) / ah if ah > 0.5 else np.array([1.0, 0, 0])
+                    pos = np.array([tr.pos[0], tr.pos[1], pos[2]]) + u_h * h_need
+                    note("separation_push")
             rel = st.pos - tr.pos
             rd = float(np.linalg.norm(rel))
             if rd < need and rd > 1e-6:
