@@ -180,6 +180,7 @@ class SafetyLimits(_Strict):
     intruder_max_speed: float = 8.0  # for the reachable-set keep-out around unobserved tracks
     reaction_time_s: float = 0.8  # camera latency + 4-frame track confirmation + autonomy + autopilot
     energy_reserve_fraction: float = 0.20
+    traffic_contingency_fraction: float = 1.0  # extra plan energy held for traffic delays
     rtl_speed: float = 6.0
     link_loss_timeout_s: float = 5.0
     land_speed: float = 0.8

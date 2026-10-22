@@ -37,7 +37,8 @@ class ValidationReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     est_duration_s: float = 0.0
-    est_energy_wh: float = 0.0
+    est_energy_wh: float = 0.0  # nominal + traffic contingency: what is checked against the battery
+    est_energy_nominal_wh: float = 0.0  # the plan flown with no traffic
     usable_energy_wh: float = 0.0
 
     @property
@@ -47,8 +48,8 @@ class ValidationReport:
     def summary(self) -> str:
         lines = [f"plan: {self.mission.describe()}"]
         lines.append(
-            f"estimate: {self.est_duration_s / 60:.1f} min, {self.est_energy_wh:.1f} Wh "
-            f"of {self.usable_energy_wh:.1f} Wh usable"
+            f"estimate: {self.est_duration_s / 60:.1f} min, {self.est_energy_nominal_wh:.1f} Wh nominal, "
+            f"{self.est_energy_wh:.1f} Wh with traffic contingency, of {self.usable_energy_wh:.1f} Wh usable"
         )
         lines += [f"warning: {w}" for w in self.warnings]
         lines += [f"ERROR: {e}" for e in self.errors]
@@ -147,10 +148,16 @@ def validate(mission: Mission, cfg: Config, world: WorldConfig) -> ValidationRep
     wh += energy.hover_wh(landing)
     duration += landing
     rep.est_duration_s = duration
+    rep.est_energy_nominal_wh = wh
+    # Traffic cannot be known before takeoff: yielding and shadowing stretch a mission.
+    # Like contingency fuel, hold an allowance proportional to the plan (sized from the
+    # benchmark, where traffic doubled a mission's energy in the worst run).
+    wh *= 1.0 + lim.traffic_contingency_fraction
     rep.est_energy_wh = wh
     if wh > rep.usable_energy_wh:
         rep.errors.append(
-            f"estimated energy {wh:.0f} Wh exceeds the {rep.usable_energy_wh:.0f} Wh usable "
+            f"estimated energy with traffic contingency {wh:.0f} Wh exceeds the "
+            f"{rep.usable_energy_wh:.0f} Wh usable "
             f"({lim.energy_reserve_fraction:.0%} reserve held back)"
         )
     return rep
