@@ -73,5 +73,7 @@ def compute_metrics(r: RunResult) -> dict[str, Any]:
                 range_mean_m=round(float(rng.mean()), 1),
                 range_min_m=round(float(rng.min()), 1),
             )
+    m["yields"] = sum(1 for e in r.events if e.kind == "yield")
+    m["returned_for_traffic"] = any(e.kind == "abort" and "traffic" in e.detail for e in r.events)
     m["events"] = [f"{e.t:.1f}s {e.kind}: {e.detail}" for e in r.events if e.kind != "contact"]
     return m

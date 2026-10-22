@@ -56,6 +56,7 @@ YIELD_HORIZON_S = 6.0  # look this far ahead for a conflict with a known contact
 YIELD_MARGIN_M = 6.0  # yield if the predicted closest approach is under min separation + this
 YIELD_CLEAR_S = 2.0  # conflict must stay clear this long before the path resumes
 YIELD_MAX_S = 60.0  # give up on the task (skip it) if it stays blocked this long
+TRAFFIC_BUDGET_S = 120.0  # total time spent giving way before the mission returns home
 
 
 @dataclass
@@ -387,6 +388,7 @@ class Executive:
         self.yield_clear_since: float | None = None
         self.yield_ref: ReferenceFilter | None = None
         self.yield_last_t = 0.0
+        self.yield_total_s = 0.0
         self.watch_radius_m = 70.0
         self.watch_memory_s = 180.0
         self.home = np.array(world.home, dtype=float)
@@ -580,6 +582,12 @@ class Executive:
             self.yield_last_t = ctx.t
             self.yield_clear_since = None
             self._log(ctx.t, "yield", f"{self.current.name} paused for track {tr.ident}")
+        # Persistent traffic over the work area: end the mission and come home rather than
+        # waiting indefinitely (the operator gets the reason in the event log).
+        if self.yield_total_s + (ctx.t - self.yield_since) > TRAFFIC_BUDGET_S and self.aborted is None:
+            self.yield_since = None
+            self.abort(SafetyRequest.RTL, ctx, f"traffic: gave way for over {TRAFFIC_BUDGET_S:.0f} s")
+            return self.current.step(ctx) if self.current is not None else None
         # yielding: keep clear until the planned motion is conflict-free for a while
         if self._conflict(ctx, self.yield_vel) is None:
             if self.yield_clear_since is None:
@@ -588,6 +596,7 @@ class Executive:
             self.yield_clear_since = None
         cleared = self.yield_clear_since is not None and ctx.t - self.yield_clear_since >= YIELD_CLEAR_S
         if cleared or ctx.t - self.yield_since >= YIELD_MAX_S:
+            self.yield_total_s += ctx.t - self.yield_since
             if cleared:
                 self._log(ctx.t, "resume", f"{self.current.name} (traffic clear)")
                 self.current.resume(ctx)
