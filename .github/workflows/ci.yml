@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: mypy
+
+  unit:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -m "not slow and not sitl" --cov=kestrel --cov-report=term-missing:skip-covered
+
+  closed-loop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -m slow
+
+  sitl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ARDUPILOT_REF: Copter-4.6.3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Restore ArduCopter SITL build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ardupilot-sitl
+          key: arducopter-sitl-${{ env.ARDUPILOT_REF }}-ubuntu24
+      - name: Build ArduCopter SITL
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: .github/scripts/build_sitl.sh "$ARDUPILOT_REF" "$GITHUB_WORKSPACE/ardupilot-sitl"
+      - run: pip install -e ".[dev]"
+      - name: Fly a mission on ArduCopter SITL
+        env:
+          ARDUPILOT_SITL: ${{ github.workspace }}/ardupilot-sitl/arducopter
+          ARDUPILOT_DEFAULTS: ${{ github.workspace }}/ardupilot-sitl/copter.parm
+        run: pytest -m sitl -v

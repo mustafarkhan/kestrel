@@ -1,0 +1,19 @@
+{
+  "runs": 24,
+  "completed_and_landed": 24,
+  "runs_with_contact_tracked": 23,
+  "separation_violations": 7,
+  "min_separation_m": {
+    "min": 7.8,
+    "median": 13.32
+  },
+  "time_to_first_track_s_median": 13.3,
+  "track_error_median_m": {
+    "median": 4.518,
+    "p90": 5.168200000000001
+  },
+  "target_in_fov_fraction_median": 1.0,
+  "false_tracks_per_run_median": 3.0,
+  "energy_actual_over_estimate_median": 0.9237668161434978,
+  "final_distance_from_home_m_max": 0.19
+}

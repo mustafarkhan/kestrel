@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kestrel-uas"
+version = "0.1.0"
+description = "Language-tasked aerial observer: natural-language missions, air-to-air detection and tracking of small UAS, and a runtime safety monitor. Simulation-first, ArduPilot over MAVLink."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Mustafa R. Khan" }]
+keywords = ["uav", "drone", "autonomy", "tracking", "mavlink", "ardupilot", "llm", "counter-uas", "robotics"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "pydantic>=2.6",
+  "pyyaml>=6.0",
+  "pymavlink>=2.4.40",
+  "matplotlib>=3.8",
+  "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-cov>=5", "hypothesis>=6.100", "ruff>=0.6", "mypy>=1.10", "types-PyYAML"]
+
+[project.scripts]
+kestrel = "kestrel.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kestrel"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "NPY", "RUF"]
+ignore = ["RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+packages = ["kestrel"]
+
+[[tool.mypy.overrides]]
+module = ["pymavlink.*", "scipy.*", "matplotlib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "slow: closed-loop simulations (minutes)",
+  "sitl: needs an ArduCopter SITL binary (ARDUPILOT_SITL env var)",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"docs/video/*" = ["E501", "RUF001"]  # on-screen text: long strings, typographic ×
