@@ -16,6 +16,7 @@ from scipy import ndimage
 
 from kestrel.geometry import Vec, rot_z
 from kestrel.perception.camera import Camera, CameraPose
+from kestrel.sim.birds import BirdState
 
 _SKY_ZENITH = np.array([92.0, 140.0, 205.0])
 _SKY_HORIZON = np.array([200.0, 214.0, 228.0])
@@ -23,6 +24,8 @@ _CLOUD = np.array([238.0, 240.0, 244.0])
 _GROUND_A = np.array([70.0, 88.0, 52.0])
 _GROUND_B = np.array([104.0, 96.0, 70.0])
 _TARGET = np.array([42.0, 42.0, 46.0])
+_BIRD = np.array([52.0, 46.0, 40.0])
+R_MIN_PX = 0.35  # smallest disc the 4x supersampling grid draws reliably
 
 
 def _fractal_noise(rng: np.random.Generator, shape: tuple[int, int], beta: float = 2.4) -> Vec:
@@ -68,11 +71,16 @@ class SkyRenderer:
         self._n = n
 
     def render(
-        self, pose: CameraPose, targets: list[tuple[Vec, float, float]], noise_sigma: float
+        self,
+        pose: CameraPose,
+        targets: list[tuple[Vec, float, float]],
+        noise_sigma: float,
+        birds: list[BirdState] | None = None,
     ) -> np.ndarray:
         """Render an RGB uint8 frame.
 
-        ``targets`` are ``(position, span_m, yaw)`` of aircraft in the world.
+        ``targets`` are ``(position, span_m, yaw)`` of aircraft in the world; ``birds`` are
+        drawn with their current wing position.
         """
         h, w = self.cam.height, self.cam.width
         d = self.rays @ pose.r_world_cam.T.astype(np.float32)  # (H, W, 3) world directions
@@ -107,6 +115,8 @@ class SkyRenderer:
 
         for pos, span, yaw in targets:
             self._draw_aircraft(img, pose, pos, span, yaw)
+        for b in birds or []:
+            self._draw_bird(img, pose, b)
 
         if noise_sigma > 0:
             off = int(self.rng.integers(0, 3 * self._n))
@@ -115,6 +125,38 @@ class SkyRenderer:
         return out
 
     def _draw_aircraft(self, img: np.ndarray, pose: CameraPose, pos: Vec, span: float, yaw: float) -> None:
+        """Quadrotor silhouette: central body + four rotor discs (spinning props blur to discs)."""
+        rz = rot_z(yaw)
+        parts = [(np.zeros(3), 0.22 * span)]
+        for k in range(4):
+            ang = math.pi / 4 + k * math.pi / 2
+            parts.append((rz @ np.array([math.cos(ang), math.sin(ang), 0.0]) * span * 0.36, 0.16 * span))
+        self._draw_parts(img, pose, pos, span, parts, _TARGET)
+
+    def _draw_bird(self, img: np.ndarray, pose: CameraPose, b: BirdState) -> None:
+        """Body along the flight direction plus two wings whose extent and height follow the beat."""
+        heading = math.atan2(b.vel[1], b.vel[0])
+        fwd = np.array([math.cos(heading), math.sin(heading), 0.0])
+        left = np.array([-fwd[1], fwd[0], 0.0])
+        s = b.span
+        parts = [(np.zeros(3), 0.09 * s), (fwd * 0.17 * s, 0.06 * s), (-fwd * 0.2 * s, 0.05 * s)]
+        for k in (1, 2, 3, 4):
+            frac = k / 4.0
+            for side in (1.0, -1.0):
+                off = left * side * frac * 0.5 * s * b.spread + np.array([0.0, 0.0, b.tip_dz * frac])
+                parts.append((off, 0.075 * s * (1.0 - 0.3 * frac)))
+        self._draw_parts(img, pose, b.pos, s, parts, _BIRD)
+
+    def _draw_parts(
+        self,
+        img: np.ndarray,
+        pose: CameraPose,
+        pos: Vec,
+        span: float,
+        parts: list[tuple[Vec, float]],
+        colour: np.ndarray,
+    ) -> None:
+        """Rasterise a silhouette made of discs ``(offset from pos, radius m)``."""
         cam = self.cam
         c = cam.project(pose, pos)
         if c is None:
@@ -135,21 +177,22 @@ class SkyRenderer:
         ys = np.arange(y0 * ss, y1 * ss) / ss + 0.5 / ss - 0.5
         gx, gy = np.meshgrid(xs, ys)
         cover = np.zeros_like(gx)
-        rz = rot_z(yaw)
-        parts = [(np.zeros(3), 0.22)]
-        for k in range(4):
-            ang = math.pi / 4 + k * math.pi / 2
-            parts.append((rz @ np.array([math.cos(ang), math.sin(ang), 0.0]) * span * 0.36, 0.16))
         for off, rad in parts:
             pc = cam.project(pose, pos + off)
             if pc is None:
                 continue
-            rr = max(cam.fx * rad * span / pc[2], 0.35)
-            cover = np.maximum(cover, ((gx - pc[0]) ** 2 + (gy - pc[1]) ** 2 <= rr * rr).astype(float))
+            # A part smaller than the supersampling grid resolves is drawn at the smallest radius
+            # the grid samples reliably, with its opacity scaled down so its *area* (what a pixel
+            # integrates) stays true. Drawing it at that radius at full opacity would make distant
+            # objects look several times larger and more detectable than they are.
+            r_true = cam.fx * rad / pc[2]
+            rr = max(r_true, R_MIN_PX)
+            weight = min(1.0, (r_true / R_MIN_PX) ** 2)
+            inside = (gx - pc[0]) ** 2 + (gy - pc[1]) ** 2 <= rr * rr
+            cover = np.maximum(cover, inside * weight)
         alpha = cover.reshape(y1 - y0, ss, x1 - x0, ss).mean(axis=(1, 3))
-        alpha = ndimage.gaussian_filter(alpha, 0.6)  # optics PSF
-        alpha *= min(1.0, 0.55 + 0.45 * r_px)  # sub-pixel targets lose contrast
+        alpha = ndimage.gaussian_filter(alpha, 0.6)  # optics PSF: spreads, and so dims, small objects
         ya, yb = max(y0, 0), min(y1, cam.height)
         xa, xb = max(x0, 0), min(x1, cam.width)
         a = alpha[ya - y0 : yb - y0, xa - x0 : xb - x0][..., None]
-        img[ya:yb, xa:xb] = img[ya:yb, xa:xb] * (1 - a) + _TARGET * a
+        img[ya:yb, xa:xb] = img[ya:yb, xa:xb] * (1 - a) + colour * a

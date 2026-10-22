@@ -60,6 +60,14 @@ CUE_AGE_S = 3.0  # external cues arrive late (acoustic: ~1 s) so they are truste
 TRAFFIC_BUDGET_S = 120.0  # total time spent giving way before the mission returns home
 
 
+DECLARE_P_UAV = 0.6  # a classified track is reported as a drone above this probability
+
+
+def declared_drone(tr: TrackEstimate) -> bool:
+    """Without a classifier every track is a drone; with one, only when it says so."""
+    return tr.p_uav is None or tr.p_uav >= DECLARE_P_UAV
+
+
 @dataclass
 class Context:
     t: float
@@ -67,6 +75,10 @@ class Context:
     vehicle: Vehicle
     tracks: list[TrackEstimate]  # camera tracks: may be shadowed
     cues: list[TrackEstimate] = field(default_factory=list)  # external cues: point camera, keep clear
+
+    def drones(self) -> list[TrackEstimate]:
+        """Camera tracks declared drones. Birds are still kept clear of, but not reported or followed."""
+        return [tr for tr in self.tracks if declared_drone(tr)]
 
     def contacts(self, max_age_s: float) -> list[TrackEstimate]:
         """Camera tracks and external cues heard or seen within ``max_age_s``."""
@@ -293,7 +305,7 @@ class TrackB(Behaviour):
         return max(tracks, key=lambda tr: tr.hits)
 
     def step(self, ctx: Context) -> Setpoint | None:
-        tr = self._pick(ctx.tracks)
+        tr = self._pick(ctx.drones())
         if tr is None or ctx.t - tr.last_hit_t > 1.0:
             if tr is None:
                 self.target_id = None
@@ -332,7 +344,7 @@ class TrackB(Behaviour):
         return ctx.t - self.t0 >= self.duration or ctx.t - self.last_seen > self.lost_timeout
 
     def gimbal_tilt(self, ctx: Context) -> float | None:
-        tr = self._pick(ctx.tracks)
+        tr = self._pick(ctx.drones())
         if tr is None:
             return None
         d = tr.pos - ctx.state.pos
@@ -504,7 +516,7 @@ class Executive:
 
     # ------------------------------------------------------------------ main step
     def _contacts(self, ctx: Context) -> None:
-        for tr in ctx.tracks:
+        for tr in ctx.drones():
             if tr.hits >= 8 and tr.ident not in self.reported_contacts:
                 self.reported_contacts.add(tr.ident)
                 p = tr.pos
@@ -515,7 +527,7 @@ class Executive:
             return
         fresh = [
             tr
-            for tr in ctx.tracks
+            for tr in ctx.drones()
             if tr.hits >= 8 and tr.pos_std < 15.0 and tr.ident not in self.handled_contacts
         ]
         if not fresh or ctx.t < self.contact_cooldown_until:
@@ -577,6 +589,11 @@ class Executive:
         if not self.avoidance or not isinstance(self.current, PathB) or self.aborted == "land":
             self.yield_since = None
             return sp
+        if self.yield_since is None and self.yield_total_s >= TRAFFIC_BUDGET_S:
+            # Budget spent and already returning home: stop giving way, or persistent traffic
+            # could keep the aircraft out until the battery decides. Separation is still
+            # enforced by the safety monitor, which does not depend on the executive.
+            return sp
         if self.yield_since is None:
             if sp is None:
                 return sp
@@ -597,6 +614,7 @@ class Executive:
         # Persistent traffic over the work area: end the mission and come home rather than
         # waiting indefinitely (the operator gets the reason in the event log).
         if self.yield_total_s + (ctx.t - self.yield_since) > TRAFFIC_BUDGET_S and self.aborted is None:
+            self.yield_total_s += ctx.t - self.yield_since
             self.yield_since = None
             self.abort(SafetyRequest.RTL, ctx, f"traffic: gave way for over {TRAFFIC_BUDGET_S:.0f} s")
             return self.current.step(ctx) if self.current is not None else None

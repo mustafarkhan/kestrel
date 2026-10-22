@@ -41,13 +41,25 @@ only for what they say about *sensing*.
 | GNSS denial | Ukrainian systems switch to optical navigation when spoofing is detected [10] | **Out of scope**: navigation is the autopilot's job. A GNSS-integrity check is roadmap |
 | Mass and autonomy | The IISS expects more autonomy with one mission manager over several air vehicles, and notes the value of detection as early indication even without dissuasion [11] | **Consistent**: one operator instruction drives a fully autonomous mission; multi-vehicle tasking is roadmap |
 
-## 4. Roadmap, in order
+## 4. What allied programmes ask for
+
+| Need | Source | Kestrel |
+|---|---|---|
+| A common message standard for counter-UAS sensors, so systems from different nations and companies feed one picture | SAPIENT (Dstl, BSI Flex 335), trialled at NATO's counter-UAS Technical Interoperability Exercise with 17 sensor and 7 decision modules, in NATO standardisation since 2024 [12, 13]; the ECFR calls for common standards and certification with NATO and one command-and-control node fed by every flank detection station [14] | **Implements** a SAPIENT ICD v7 export: registration, status and detection reports from two nodes (airborne cameras, ground acoustic network), UTM coordinates with one-sigma errors (`interop/sapient.py`, `docs/interop.md`). Protobuf wire encoding and a conformance run are not done |
+| Birds: radar and optical sensors raise false alarms on birds | ECFR [14]; the acoustic report [8] | **Implements** birds in the simulated sky (intermittent flapping and gliding, corvid-to-gull size) and a wing-beat flicker classifier on the track's brightness history (`perception/classify.py`). **Measures** bird tracks reported as drones with the classifier off and on. Gliding birds cannot be told apart by this cue |
+| Several drones at once | ECFR [14] ("multi-shot" defence against simultaneous drones); IISS [11] | **Measures** a two-intruder benchmark set. Engagement is out of scope; Kestrel detects, tracks, keeps clear and reports |
+| Layered detection with a C2 node over it | ECFR [14]; NATO Eastern Sentry counter-drone training and the EU Eastern Flank Watch [15] | **Consistent**: the acoustic layer cues the camera and both report as separate SAPIENT nodes, so a fusion node can weigh them on their own records |
+
+## 5. Roadmap, in order
 
 1. Evaluate the detector on real air-to-air footage (public datasets, e.g. AOT [1]).
 2. Multi-frame, ego-motion-compensated detection, as in AirTrack [2].
 3. A tau-based well-clear definition compared against the current distance-based one [6].
 4. Real flight with a cooperating target drone.
 5. GNSS-integrity monitoring and multi-vehicle tasking.
+6. SAPIENT protobuf encoding from the Dstl `.proto` files and a run against the SAPIENT test harness.
+7. Thermal imagery for night operation; event cameras [4].
+8. A Gazebo/ROS 2 bridge so the same autonomy runs against the photoreal simulators used in industry.
 
 ## Sources
 
@@ -62,3 +74,7 @@ only for what they say about *sensing*.
 9. Wikipedia, *Fiber optic drone*. https://en.wikipedia.org/wiki/Fiber_optic_drone
 10. Razom, *Drone that cannot be jammed: how Ukrainian developers taught unmanned vehicles to recognize GPS spoofing*. https://razomua.media/en/news/politika/dron-yakoho-ne-zbyty-hlushinnyam-yak-ukrayinski-rozrobnyky-navchyly-bezpilotnyky-rozpiznavaty-pidminu-gps
 11. IISS, *UAVs: ISR, deterrence and war*, Strategic Dossier (March 2026). https://www.iiss.org/globalassets/media-library---content--migration/files/publications---free-files/strategic-dossier/uavs-2026/iiss_uavs-isr-deterrence-and-war_032026.pdf
+12. Dstl, *SAPIENT Interface Control Document*, version 7.0 (2023). https://assets.publishing.service.gov.uk/media/6419a2068fa8f547c68029d3/SAPIENT_Interface_Control_Document_v7_FINAL__fixed2_.pdf
+13. *SAPIENT becomes NATO standard for counter-drone systems* (June 2026). https://letsdatascience.com/news/sapient-becomes-nato-standard-for-counter-drone-systems-199eb30d
+14. ECFR, *Buzzkill: how to defend Europe against drones* (2026). https://ecfr.eu/publication/buzzkill-how-to-defend-europe-against-drones/
+15. *NATO conducts counter-drone training mission over Baltics* (Eastern Sentry), Defence Industry Europe. https://defence-industry.eu/nato-conducts-counter-drone-training-mission-over-baltics-to-reinforce-eastern-flank-air-defence-and-deterrence/ ; European Parliamentary Research Service, *Eastern Flank Watch and the European drone wall* (October 2025). https://epthinktank.eu/2025/10/23/eastern-flank-watch-and-european-drone-wall/

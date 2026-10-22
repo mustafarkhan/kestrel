@@ -126,6 +126,9 @@ class TrackerParams(_Strict):
     confirm_window: int = 6
     max_coast_s: float = 5.0  # lost tracks linger with growing uncertainty: separation keeps respecting them
     max_position_std: float = 25.0
+    # Classify tracks as bird or drone from wing-beat flicker (perception/classify.py). Off by
+    # default so the bird-free benchmarks are unchanged; configs/birds.yaml turns it on.
+    classify_birds: bool = False
 
 
 # --------------------------------------------------------------------------- world
@@ -168,6 +171,9 @@ class WorldConfig(_Strict):
         default_factory=lambda: [(-150.0, -150.0), (150.0, -150.0), (150.0, 150.0), (-150.0, 150.0)]
     )
     home: XYZ = (0.0, 0.0, 0.0)
+    # Geodetic position (lat deg, lon deg, alt m above the geoid) of the local ENU origin, used
+    # for reports to other systems. Default: ArduPilot SITL's default home.
+    origin_lla: XYZ = (-35.363261, 149.165230, 584.0)
     sites: dict[str, Site] = Field(default_factory=dict)
     wind: WindParams = WindParams()
 
@@ -216,6 +222,23 @@ class IntruderConfig(_Strict):
     span_m: float = 0.35
 
 
+class BirdConfig(_Strict):
+    """Birds in the operating area: the main source of false alarms for drone detection.
+
+    Defaults describe medium birds (corvids, pigeons, gulls) whose size at range is close
+    to a small drone's. Many birds fly intermittently, alternating flapping and gliding;
+    a gliding bird has no wing-beat to give it away.
+    """
+
+    count: int = 0  # birds present at any time (a bird that leaves is replaced)
+    span_m: XY = (0.5, 1.0)
+    speed: XY = (8.0, 13.0)
+    altitude: XY = (10.0, 60.0)  # AGL
+    flap_hz: XY = (3.0, 6.0)
+    glide_fraction: float = 0.3  # share of time spent gliding
+    mean_bout_s: float = 2.5  # mean length of a flapping bout
+
+
 class LinkLossEvent(_Strict):
     start_s: float
     duration_s: float
@@ -227,6 +250,7 @@ class Scenario(_Strict):
     max_duration_s: float = 420.0
     world: WorldConfig = WorldConfig()
     intruders: list[IntruderConfig] = Field(default_factory=list)
+    birds: BirdConfig = BirdConfig()
     link_loss: list[LinkLossEvent] = Field(default_factory=list)
 
 

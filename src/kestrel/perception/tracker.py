@@ -30,6 +30,7 @@ from scipy.optimize import linear_sum_assignment
 from kestrel.config import TrackerParams
 from kestrel.geometry import Vec, wrap_pi
 from kestrel.perception.camera import Camera, CameraPose
+from kestrel.perception.classify import FlickerClassifier
 from kestrel.perception.detector import Detection
 
 
@@ -48,6 +49,7 @@ class Track:
     history: list[bool] = field(default_factory=list)
     last_hit_t: float = 0.0
     hits: int = 0
+    flicker: FlickerClassifier = field(default_factory=FlickerClassifier)
 
     @property
     def pos(self) -> Vec:
@@ -71,6 +73,8 @@ class TrackEstimate:
     confirmed: bool
     hits: int
     last_hit_t: float
+    hit_ratio: float = 1.0  # fraction of recent in-view frames with a detection
+    p_uav: float | None = None  # probability the object is a drone rather than a bird (None: unknown)
 
     @property
     def pos_std(self) -> float:
@@ -129,7 +133,7 @@ class MultiTargetTracker:
         tr.cov = f @ tr.cov @ f.T + qm
         tr.t = t
 
-    def _init_track(self, z: Vec, c: Vec, t: float) -> Track:
+    def _init_track(self, z: Vec, c: Vec, t: float, flux: float = 0.0) -> Track:
         az, el, lr = z
         u = np.array([math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el)])
         rng = math.exp(lr)
@@ -141,6 +145,7 @@ class MultiTargetTracker:
         cov[0:3, 0:3] = pos_cov
         cov[3:6, 3:6] = np.eye(3) * 8.0**2
         tr = Track(self._next_id, x, cov, t, history=[True], last_hit_t=t, hits=1)
+        tr.flicker.add(t, flux)
         self._next_id += 1
         return tr
 
@@ -181,6 +186,7 @@ class MultiTargetTracker:
                 tr.history.append(True)
                 tr.hits += 1
                 tr.last_hit_t = t
+                tr.flicker.add(t, detections[j].flux)
                 assigned_t.add(i)
                 assigned_d.add(j)
 
@@ -189,7 +195,7 @@ class MultiTargetTracker:
                 tr.history.append(False)
         for j, z in enumerate(zs):
             if j not in assigned_d and detections[j].score >= self.p.init_score:
-                self.tracks.append(self._init_track(z, c, t))
+                self.tracks.append(self._init_track(z, c, t, detections[j].flux))
         self._manage(t)
 
     def _manage(self, t: float) -> None:
@@ -231,7 +237,15 @@ class MultiTargetTracker:
             cov[0:3, 0:3] += np.eye(3) * (self.p.accel_noise**2) * dt**3 / 3 + tr.cov[3:6, 3:6] * dt**2
             out.append(
                 TrackEstimate(
-                    tr.ident, x[0:3], x[3:6], cov, tr.status is TrackStatus.CONFIRMED, tr.hits, tr.last_hit_t
+                    tr.ident,
+                    x[0:3],
+                    x[3:6],
+                    cov,
+                    tr.status is TrackStatus.CONFIRMED,
+                    tr.hits,
+                    tr.last_hit_t,
+                    hit_ratio=sum(tr.history) / max(len(tr.history), 1),
+                    p_uav=tr.flicker.p_uav() if self.p.classify_birds else None,
                 )
             )
         return out

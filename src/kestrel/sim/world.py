@@ -13,6 +13,7 @@ import numpy as np
 from kestrel.config import Config, Scenario
 from kestrel.control.geometric import GeometricController
 from kestrel.geometry import Vec, yaw_of
+from kestrel.sim.birds import BirdState, Flock
 from kestrel.sim.intruder import Intruder
 from kestrel.sim.quadrotor import Quadrotor
 from kestrel.sim.wind import Wind
@@ -29,6 +30,11 @@ class SimWorld:
         self.ctrl = GeometricController(cfg.vehicle, cfg.control)
         self.wind = Wind(scenario.world.wind, self.rng)
         self.intruders = [Intruder(c, i) for i, c in enumerate(scenario.intruders)]
+        self.flock = (
+            Flock(scenario.birds, scenario.world, float(home[2]), scenario.seed)
+            if scenario.birds.count
+            else None
+        )
         self.t = 0.0
         self.mode = FlightMode.DISARMED
         self.setpoint = Setpoint.hold(home, 0.0)
@@ -89,6 +95,9 @@ class SimWorld:
             if s is not None:
                 out.append((it.ident, s[0], s[1]))
         return out
+
+    def bird_states(self) -> list[BirdState]:
+        return self.flock.states(self.t) if self.flock is not None else []
 
     def step(self, dt: float) -> None:
         self.wind_now = self.wind.step(dt)

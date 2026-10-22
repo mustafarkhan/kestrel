@@ -20,7 +20,8 @@ import numpy as np
 
 from kestrel.config import Config, Scenario
 from kestrel.geometry import Vec
-from kestrel.mission.executive import Context, Event, Executive
+from kestrel.interop.sapient import SapientExporter
+from kestrel.mission.executive import Context, Event, Executive, declared_drone
 from kestrel.mission.llm import ChatBackend, MissionPlanner, PlanResult
 from kestrel.mission.parser import parse_emergency
 from kestrel.mission.schema import Mission
@@ -31,6 +32,7 @@ from kestrel.perception.detector import Detection, SkyTargetDetector
 from kestrel.perception.render import SkyRenderer
 from kestrel.perception.tracker import MultiTargetTracker, TrackEstimate
 from kestrel.safety.monitor import SafetyMonitor, SafetyRequest
+from kestrel.sim.birds import BirdState
 from kestrel.sim.world import SimWorld
 from kestrel.vehicle.sim_vehicle import SimVehicle
 
@@ -45,6 +47,8 @@ class Frame:
     tracks_px: list[tuple[int, float, float, bool]]  # id, u, v, confirmed
     truth_px: list[tuple[float, float]]
     behaviour: str
+    birds_px: list[tuple[float, float]] = field(default_factory=list)
+    p_uav: dict[int, float] = field(default_factory=dict)  # classifier output per track id
 
 
 @dataclass
@@ -62,6 +66,10 @@ class FlightLog:
     track: list[Vec] = field(default_factory=list)  # followed / best track estimate (nan if none)
     track_std: list[float] = field(default_factory=list)
     n_confirmed: list[int] = field(default_factory=list)
+    bird_dist: list[float] = field(default_factory=list)  # to the nearest bird (inf if none)
+    intruder_dist: list[float] = field(default_factory=list)  # to the nearest intruder (nan if none)
+    birds: list[Vec] = field(default_factory=list)  # bird positions (n x 3) per tick, for replay
+    cues: list[Vec] = field(default_factory=list)  # live acoustic fixes (n x 2) per tick, for replay
     frames: list[Frame] = field(default_factory=list)
 
     def arrays(self) -> dict[str, np.ndarray]:
@@ -77,6 +85,8 @@ class FlightLog:
             "track": np.array(self.track),
             "track_std": np.array(self.track_std),
             "n_confirmed": np.array(self.n_confirmed),
+            "bird_dist": np.array(self.bird_dist),
+            "intruder_dist": np.array(self.intruder_dist),
         }
 
 
@@ -94,7 +104,15 @@ class RunResult:
     completed: bool
     scenario: Scenario
     config: Config
-    false_confirmed: int = 0  # confirmed tracks that never matched a real aircraft (false alarms)
+    false_confirmed: int = 0  # tracks declared drones that never matched a real aircraft (false alarms)
+    bird_tracks: int = 0  # confirmed tracks on birds
+    birds_declared_drone: int = 0  # of those, reported as a drone at some point
+    drones_declared: int = 0  # confirmed tracks on intruders that were reported as a drone
+    drones_matched: int = 0  # confirmed tracks on intruders
+    track_truth: dict[int, str] = field(
+        default_factory=dict
+    )  # "drone" / "bird" / "false" per confirmed track
+    track_p_uav: dict[int, list[tuple[float, float]]] = field(default_factory=dict)  # classifier history
 
     @property
     def flown(self) -> bool:
@@ -117,6 +135,40 @@ def _cue_estimate(fix: AcousticFix, observer_alt: float, ident: int) -> TrackEst
     cov[3:6, 3:6] = np.eye(3) * 25.0
     pos = np.array([fix.xy[0], fix.xy[1], observer_alt])
     return TrackEstimate(ident, pos, np.zeros(3), cov, True, 0, fix.t)
+
+
+def _on_bird(observer: Vec, track_pos: Vec, birds: list[BirdState], max_deg: float = 3.0) -> bool:
+    """Is the track looking at a bird? Matched by bearing from the observer, not position:
+    the range of a bird is estimated from an assumed drone size, so it is wrong by the ratio
+    of the two sizes, while its bearing is right."""
+    d = track_pos - observer
+    n = float(np.linalg.norm(d))
+    if n < 1e-6:
+        return False
+    cos_max = math.cos(math.radians(max_deg))
+    for b in birds:
+        e = b.pos - observer
+        if float(d @ e) / (n * float(np.linalg.norm(e)) + 1e-9) > cos_max:
+            return True
+    return False
+
+
+def _explained(fix: AcousticFix, tracks: list[TrackEstimate], t: float, gate: float = 9.21) -> bool:
+    """Is this acoustic fix the aircraft the camera is already tracking?
+
+    A cue is for aircraft the camera has *not* got. Once a fresh visual track lies within the
+    fix's horizontal uncertainty (chi-square gate, 2 DoF, p = 0.99), the track supersedes it:
+    it carries altitude and velocity, which sound cannot, so keeping the cue as well would
+    only add an altitude-unknown column on top of an aircraft whose height is known.
+    """
+    for tr in tracks:
+        if t - tr.last_hit_t > 1.0:
+            continue
+        d = tr.pos[0:2] - fix.xy
+        s = fix.cov_xy + tr.cov[0:2, 0:2]
+        if float(d @ np.linalg.solve(s, d)) < gate:
+            return True
+    return False
 
 
 def _span_yaw(vel: Vec) -> float:
@@ -145,6 +197,7 @@ def run(
     perception_enabled: bool = True,
     record_downsample: int = 2,
     avoidance: bool = True,
+    sapient: SapientExporter | None = None,
 ) -> RunResult:
     """Fly one closed-loop mission.
 
@@ -166,6 +219,9 @@ def run(
     monitor = SafetyMonitor(cfg.safety, cfg.vehicle, scenario.world, separation=avoidance)
     matched_ids: set[int] = set()
     confirmed_ids: set[int] = set()
+    declared_ids: set[int] = set()
+    bird_ids: set[int] = set()
+    p_hist: dict[int, list[tuple[float, float]]] = {}
     acoustic = (
         AcousticNetwork(cfg.acoustic, scenario.world, np.random.default_rng(scenario.seed + 91))
         if cfg.acoustic.enabled and perception_enabled
@@ -193,6 +249,7 @@ def run(
         t = world.t
         st = vehicle.state()
         intruders = world.intruder_states()
+        birds = world.bird_states()
 
         # ---------------------------------------------------------- perception
         # gimbal: slew towards the executive's request at a bounded rate
@@ -209,7 +266,7 @@ def run(
             for off in cfg.camera.yaw_offsets_deg:
                 pose_c = perc.camera.pose(s.pos, s.quat, tilt, off).jittered(gimbal_rng, jitter)
                 est_c = perc.camera.pose(st.pos, st.quat, tilt, off)
-                img_c = perc.renderer.render(pose_c, targets, cfg.camera.noise_sigma)
+                img_c = perc.renderer.render(pose_c, targets, cfg.camera.noise_sigma, birds)
                 dets_c = perc.detector.detect(img_c, est_c)
                 pending.append((t + cfg.camera.latency_s, t, dets_c, est_c))
                 if off == cfg.camera.yaw_offsets_deg[0]:
@@ -223,9 +280,13 @@ def run(
                     if uv:
                         tp.append((e.ident, uv[0], uv[1], e.confirmed))
                 truth = [uv[:2] for _, p, _ in intruders if (uv := perc.camera.project(true_pose, p))]
+                bpx = [uv[:2] for bs in birds if (uv := perc.camera.project(true_pose, bs.pos))]
                 b = executive.current.name if executive.current else "idle"
+                pu = {e.ident: e.p_uav for e in ests if e.p_uav is not None}
                 log.frames.append(
-                    Frame(t, img[::record_downsample, ::record_downsample].copy(), dets, tp, truth, b)
+                    Frame(
+                        t, img[::record_downsample, ::record_downsample].copy(), dets, tp, truth, b, bpx, pu
+                    )
                 )
         while pending and pending[0][0] <= t:
             _, stamp, dets, pose = pending.pop(0)
@@ -236,10 +297,16 @@ def run(
         if acoustic is not None and t >= next_acoustic:
             next_acoustic += 1.0 / cfg.acoustic.rate_hz
             acoustic_pending += [(t + cfg.acoustic.latency_s, f) for f in acoustic.sense(t, intruders)]
+        released: list[AcousticFix] = []
         while acoustic_pending and acoustic_pending[0][0] <= t:
-            acoustic_fixes.append(acoustic_pending.pop(0)[1])
+            released.append(acoustic_pending.pop(0)[1])
+        acoustic_fixes += released
         acoustic_fixes = [f for f in acoustic_fixes if t - f.t < cfg.acoustic.cue_memory_s]
-        cues = [_cue_estimate(f, st.pos[2], -(k + 1)) for k, f in enumerate(acoustic_fixes)]
+        cues = [
+            _cue_estimate(f, st.pos[2], -(k + 1))
+            for k, f in enumerate(acoustic_fixes)
+            if not _explained(f, tracks, t)
+        ]
 
         # ---------------------------------------------------------- decide
         ctx = Context(t=t, state=st, vehicle=vehicle, tracks=tracks, cues=cues)
@@ -257,6 +324,9 @@ def run(
         dec = monitor.filter(st, sp, tracks + cues, executive.low_altitude_ok)
         if dec.setpoint is not None:
             vehicle.set_setpoint(dec.setpoint)
+        if sapient is not None:
+            mode = executive.current.name if executive.current else "idle"
+            sapient.step(t, st.pos, mode, tracks, released, acoustic is not None, scenario.world.home[2])
 
         # ---------------------------------------------------------- log
         s = world.quad.state
@@ -292,10 +362,22 @@ def run(
             log.track.append(np.full(3, np.nan))
             log.track_std.append(float("nan"))
         log.n_confirmed.append(len(tracks))
+        log.birds.append(np.array([b.pos for b in birds]).reshape(-1, 3))
+        log.cues.append(np.array([f.xy for f in acoustic_fixes]).reshape(-1, 2))
+        log.intruder_dist.append(
+            min((float(np.linalg.norm(p - s.pos)) for _, p, _ in intruders), default=math.nan)
+        )
+        log.bird_dist.append(min((float(np.linalg.norm(b.pos - s.pos)) for b in birds), default=math.inf))
         for tr in tracks:
             confirmed_ids.add(tr.ident)
+            if tr.p_uav is not None:
+                p_hist.setdefault(tr.ident, []).append((t, tr.p_uav))
+            if declared_drone(tr):
+                declared_ids.add(tr.ident)
             if any(float(np.linalg.norm(tr.pos - p)) < 15.0 for _, p, _ in intruders):
                 matched_ids.add(tr.ident)
+            elif birds and _on_bird(st.pos, tr.pos, birds):
+                bird_ids.add(tr.ident)
 
         if executive.finished and not world.armed:
             break
@@ -308,7 +390,15 @@ def run(
         safety_counts=monitor.counts,
         safety_reasons=monitor.reasons,
         false_tracks=perc.tracker.false_tracks_spawned,
-        false_confirmed=len(confirmed_ids - matched_ids),
+        false_confirmed=len((confirmed_ids & declared_ids) - matched_ids),
+        bird_tracks=len(bird_ids - matched_ids),
+        birds_declared_drone=len((bird_ids & declared_ids) - matched_ids),
+        drones_declared=len(matched_ids & declared_ids),
+        drones_matched=len(matched_ids),
+        track_truth={
+            i: "drone" if i in matched_ids else "bird" if i in bird_ids else "false" for i in confirmed_ids
+        },
+        track_p_uav=p_hist,
         energy_used_wh=world.energy_used_wh,
         landed=not world.armed and world.quad.on_ground,
         completed=executive.finished and executive.aborted is None,

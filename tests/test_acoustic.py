@@ -43,3 +43,18 @@ def test_out_of_range_is_silent() -> None:
     small = WorldConfig(fence=[(-50, -50), (50, -50), (50, 50), (-50, 50)])
     net = AcousticNetwork(AcousticParams(detection_probability=1.0), small, np.random.default_rng(3))
     assert net.sense(0.0, [(0, np.array([900.0, 900.0, 30.0]), np.zeros(3))]) == []
+
+
+def test_a_fix_on_a_tracked_aircraft_is_superseded_by_the_track() -> None:
+    from kestrel.perception.acoustic import AcousticFix
+    from kestrel.perception.tracker import TrackEstimate
+    from kestrel.runtime import _explained
+
+    fix = AcousticFix(10.0, np.array([50.0, 40.0]), np.diag([9.0, 9.0]), 3)
+    cov = np.eye(6) * 4.0
+    near = TrackEstimate(1, np.array([52.0, 41.0, 35.0]), np.zeros(3), cov, True, 12, 9.8)
+    far = TrackEstimate(2, np.array([90.0, 40.0, 35.0]), np.zeros(3), cov, True, 12, 9.8)
+    stale = TrackEstimate(3, np.array([50.0, 40.0, 35.0]), np.zeros(3), cov, True, 12, 7.0)
+    assert _explained(fix, [near], 10.0)
+    assert not _explained(fix, [far], 10.0)  # a second aircraft: keep the cue
+    assert not _explained(fix, [stale], 10.0)  # the camera has lost it: the cue matters again
