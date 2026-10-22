@@ -69,22 +69,7 @@ jobs:
           key: arducopter-sitl-${{ env.ARDUPILOT_REF }}-ubuntu24
       - name: Build ArduCopter SITL
         if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          pip install pexpect future
-          # empy 3.3.4 is a single module; vendor it (its setup.py does not build on new setuptools)
-          mkdir -p "$RUNNER_TEMP/pylib" "$RUNNER_TEMP/empy"
-          pip download --no-deps --no-binary :all: "empy==3.3.4" -d "$RUNNER_TEMP/empy"
-          tar xzf "$RUNNER_TEMP"/empy/empy-3.3.4.tar.gz -C "$RUNNER_TEMP/empy"
-          cp "$RUNNER_TEMP"/empy/empy-3.3.4/em.py "$RUNNER_TEMP/pylib/"
-          export PYTHONPATH="$RUNNER_TEMP/pylib"
-          git clone --depth 1 --branch "$ARDUPILOT_REF" https://github.com/ArduPilot/ardupilot.git "$RUNNER_TEMP/ardupilot"
-          cd "$RUNNER_TEMP/ardupilot"
-          git submodule update --init --depth 1 modules/mavlink modules/waf modules/DroneCAN/libcanard \
-            modules/DroneCAN/dronecan_dsdlc modules/DroneCAN/pydronecan modules/DroneCAN/DSDL
-          ./waf configure --board sitl
-          ./waf copter
-          mkdir -p "$GITHUB_WORKSPACE/ardupilot-sitl"
-          cp build/sitl/bin/arducopter Tools/autotest/default_params/copter.parm "$GITHUB_WORKSPACE/ardupilot-sitl/"
+        run: .github/scripts/build_sitl.sh "$ARDUPILOT_REF" "$GITHUB_WORKSPACE/ardupilot-sitl"
       - run: pip install -e ".[dev]"
       - name: Fly a mission on ArduCopter SITL
         env:
