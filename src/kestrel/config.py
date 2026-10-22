@@ -95,7 +95,10 @@ class DetectorParams(_Strict):
     min_area_px: int = 2
     max_area_px: int = 400
     max_aspect: float = 4.0
-    horizon_margin_deg: float = 1.5  # ignore everything below the horizon + margin
+    # Search region ends this far above the true horizon (negative: below it). -1 deg lets the
+    # detector see same-altitude traffic, which sits on the horizon; the background there is haze
+    # at kilometre range. Real skyline clutter (treelines) further down is not modelled.
+    horizon_margin_deg: float = -1.0
 
 
 class TrackerParams(_Strict):
@@ -175,7 +178,7 @@ class SafetyLimits(_Strict):
     separation_margin_sigmas: float = 2.0
     range_uncertainty_floor: float = 0.15  # size-based range is never better than this fraction
     intruder_max_speed: float = 8.0  # for the reachable-set keep-out around unobserved tracks
-    reaction_time_s: float = 0.6  # sensing + autonomy + autopilot latency budget
+    reaction_time_s: float = 0.8  # camera latency + 4-frame track confirmation + autonomy + autopilot
     energy_reserve_fraction: float = 0.20
     rtl_speed: float = 6.0
     link_loss_timeout_s: float = 5.0

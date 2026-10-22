@@ -42,10 +42,12 @@ def test_sky_mask_never_covers_ground(
     det = SkyTargetDetector(cam, cfg.detector)
     pose = cam.pose(np.array([0, 0, 20.0]), quat_from_euler(roll, pitch, 0.4), tilt)
     mask = det.sky_mask(pose)
+    # the search region may reach the configured margin below the horizon, never further
+    floor = math.sin(math.radians(min(cfg.detector.horizon_margin_deg, 0.0) - 0.2))
     for v in range(0, cam.height, 12):
         for u in range(0, cam.width, 12):
             if mask[v, u]:
-                assert cam.pixel_ray_world(pose, u, v)[2] > 0
+                assert cam.pixel_ray_world(pose, u, v)[2] > floor
 
 
 def _random_frames(cfg: Config, cam: Camera, n: int, seed: int, with_target: bool):
