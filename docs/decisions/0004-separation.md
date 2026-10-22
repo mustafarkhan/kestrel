@@ -46,3 +46,10 @@ directly at their pattern start, so an intruder could appear 6.6 m from the
 observer with nothing to detect beforehand. Late intruders now fly in from 150 m
 outside their pattern (`IntruderConfig.ingress_m`), as real traffic does; all
 published results use the corrected generator.
+
+The published matrix was then re-run after the renderer correction in
+[0010](0010-area-true-rendering.md), which shortened honest detection range. On the
+fresh set, with one forward camera, the three remaining losses of well clear are
+aircraft that came within 12 m without being in view at the time: from the side or
+behind during a survey lane, or a re-pass below the horizon. Those are sensor coverage
+cases, which is what the acoustic and camera-ring rows of the matrix measure.

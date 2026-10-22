@@ -1,53 +1,53 @@
-"""The README's benchmark table must match the committed results it came from."""
+"""The README's results must match the committed benchmark results they came from."""
 
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULTS = ROOT / "docs" / "results"
 
+_spec = importlib.util.spec_from_file_location("collect_results", ROOT / "scripts" / "collect_results.py")
+assert _spec is not None and _spec.loader is not None
+collect = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(collect)
 
-def _summary() -> dict[str, object]:
-    return json.loads((RESULTS / "bench_summary.json").read_text(encoding="utf-8"))
+
+def _matrix() -> dict[str, Any]:
+    data: dict[str, Any] = json.loads((RESULTS / "matrix.json").read_text(encoding="utf-8"))
+    return data
 
 
-def test_readme_table_matches_summary() -> None:
-    s = _summary()
+def test_readme_rows_match_the_matrix() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    sep = s["min_separation_m"]
-    err = s["track_error_median_m"]
-    assert isinstance(sep, dict) and isinstance(err, dict)
-    expected = [
-        f"{s['completed_and_landed']}/{s['runs']}",
-        f"{s['runs_with_contact_tracked']}/{s['runs']}",
-        f"{s['separation_violations']}/{s['runs']}",
-        f"{sep['min']:.1f} m",
-        f"{err['median']:.1f} m",
-        f"{err['p90']:.1f} m",
-        f"{100 * float(s['target_in_fov_fraction_median']):.0f}%",  # type: ignore[arg-type]
+    missing = [
+        st["key"] for st in _matrix()["sets"] if collect.table_row(st["label"], st["summary"]) not in readme
     ]
-    missing = [e for e in expected if e not in readme]
-    assert not missing, f"README out of date with docs/results/bench_summary.json: {missing}"
+    assert not missing, f"README out of date with docs/results/matrix.json: {missing}"
+    for st in _matrix()["sets"]:
+        if st["key"].startswith("birds"):
+            assert collect.bird_row(st["label"], st["summary"]) in readme, st["key"]
 
 
-def test_summary_matches_per_run_csv() -> None:
-    s = _summary()
-    with open(RESULTS / "bench_results.csv", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
-    assert len(rows) == s["runs"]
-    landed = sum(1 for r in rows if r["completed"] == "True" and r["landed"] == "True")
-    assert landed == s["completed_and_landed"]
-    violations = sum(
-        1 for r in rows if r["time_below_min_separation_s"] and float(r["time_below_min_separation_s"]) > 0
-    )
-    assert violations == s["separation_violations"]
-    longest = max(float(r["time_below_min_separation_s"] or 0) for r in rows)
-    closest = sorted(
-        float(r["min_separation_m"]) for r in rows if float(r["time_below_min_separation_s"] or 0) > 0
-    )
+def test_risk_ratio_is_stated_as_computed() -> None:
+    m = _matrix()
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert f"at most {longest:.1f} s" in readme and f"none longer than {longest:.1f} s" in readme
-    assert ", ".join(f"{c:.1f}" for c in closest[:-1]) + f" and\n{closest[-1]:.1f} m" in readme
+    assert f"risk ratio of {m['risk_ratio']:.2f}" in readme
+
+
+def test_summaries_match_per_run_rows() -> None:
+    for st in _matrix()["sets"]:
+        with open(RESULTS / st["key"] / "results.csv", encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        s = st["summary"]
+        assert len(rows) == s["runs"], st["key"]
+        landed = sum(1 for r in rows if r["completed"] == "True" and r["landed"] == "True")
+        assert landed == s["completed_and_landed"], st["key"]
+        inside = sum(1 for r in rows if float(r["time_below_min_separation_s"] or 0) > 0)
+        assert inside == s["separation_violations"], st["key"]
+        closest = min(float(r["min_separation_m"]) for r in rows if r["min_separation_m"])
+        assert abs(closest - s["min_separation_m"]["min"]) < 1e-6, st["key"]

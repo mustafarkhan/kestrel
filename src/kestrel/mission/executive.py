@@ -11,12 +11,15 @@ planner guessed it would be). Two things can interrupt the queue:
 * **Aborts.** Operator emergencies and latched safety requests replace the whole
   queue with hold, return-home or land. Aborts are one-way.
 
-**Contact watch.** The only sensor is one forward camera, and an aircraft that is
-not in view cannot be avoided. So once an intruder has been seen, whenever the
-observer is within ``watch_radius_m`` of its last known position it points the
-camera (heading and gimbal) at it, flying sideways if the path requires. That
-keeps the aircraft that matters in front of the sensor, and so in front of the
-safety monitor.
+**Contact watch.** The default sensor is one forward camera, and an aircraft that
+is not in view cannot be avoided. So for a short time after an intruder was last
+seen (``watch_memory_s``), while the observer is within ``watch_radius_m`` of that
+position, it points the camera (heading and gimbal) at it, flying sideways if the
+path requires. That keeps an aircraft that may be turning back in front of the
+sensor. The memory is short on purpose: an aircraft unseen for longer could be
+anywhere within a radius larger than the watch radius, and staring at where it
+used to be leaves the direction of travel, where closing speeds are highest,
+unwatched (decision 0012).
 """
 
 from __future__ import annotations
@@ -416,7 +419,7 @@ class Executive:
         self.return_yield_s = 0.0
         self.handled_aircraft: dict[int, tuple[float, Vec]] = {}  # track id -> (last seen, position)
         self.watch_radius_m = 70.0
-        self.watch_memory_s = 180.0
+        self.watch_memory_s = 15.0  # 15 s at 8 m/s: the contact is within ~135 m of where it was
         self.home = np.array(world.home, dtype=float)
 
     # ------------------------------------------------------------------ helpers

@@ -38,12 +38,24 @@ need = min_separation
 Each term was added because a simulated encounter violated separation without it
 (see [decisions/0004-separation.md](decisions/0004-separation.md)).
 
+**Every contact is kept clear of, whatever it is.** Birds get the same buffer as
+drones: a bird is a collision hazard too, and a drone the classifier mistakes for a
+bird must not lose protection. The classifier changes what is *reported* and
+*followed*, never what is *avoided*. Acoustic cues the camera cannot yet confirm are
+kept clear of as vertical columns, because sound gives no altitude.
+
+**Giving way is bounded; separation is not.** The executive gives way to traffic
+crossing its planned path, for at most two minutes per mission and 30 s on the way
+home, so persistent traffic cannot hold the aircraft out until the battery decides.
+The monitor's separation filter does not depend on either budget.
+
 ## What is *not* covered
 
 Stated plainly, because these are the limits an operator must know:
 
-* **Unseen aircraft.** There is one forward camera. An aircraft that never enters
-  its field of view cannot be avoided. The executive mitigates this by keeping the
+* **Unseen aircraft.** In the default configuration there is one forward camera. An
+  aircraft that never enters its field of view cannot be avoided by sight; the
+  acoustic network and the five-camera ring configuration are measured as mitigations. The executive mitigates this by keeping the
   camera on the last known contact while nearby, but an unknown aircraft arriving
   from behind is not detected. A rear camera, radar, or a Remote ID / ADS-B feed
   would close this gap.
@@ -54,8 +66,10 @@ Stated plainly, because these are the limits an operator must know:
   both aircraft close fast, there may not be room to stop. The benchmark reports
   these cases; it does not hide them.
 * **Intruder model.** Simulated intruders fly figure-eights, orbits and waypoint
-  loops at 2-6 m/s with accelerations up to 3 m/s^2. Faster or more aggressive
-  aircraft are not evaluated.
+  loops at 2-6 m/s with accelerations up to 3 m/s^2, one or two at a time. Faster or
+  more aggressive aircraft, and larger groups, are not evaluated.
+* **Birds.** Gliding birds look like drones to the flicker classifier and are
+  reported as such; birds are modelled as medium-sized (0.5-1 m span).
 * **Simulation only.** The flight dynamics, camera and target models are
   simplified. The MAVLink path is tested against ArduCopter SITL, not a real
   airframe. Nothing here is flight-qualified.

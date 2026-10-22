@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+SEED0 = 4000  # the published set: never used while developing (1000-2999 tuning, 3000 diagnosis)
+RUNS = 24
 sys.path.insert(0, str(ROOT / "src"))
 
 from kestrel.bench import risk_ratio, summarise  # noqa: E402
@@ -87,9 +89,11 @@ def main(prefix: str) -> None:
             summary["seed0"] = first["seed0"]
             (dst / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         summary = json.loads((dst / "summary.json").read_text(encoding="utf-8"))
-        sets.append({"key": key, "label": label, "command": f"{cmd} --runs 24 --seed0 3000", "summary": summary})
+        sets.append(
+            {"key": key, "label": label, "command": f"{cmd} --runs 24 --seed0 3000", "summary": summary}
+        )
     by = {s["key"]: s["summary"] for s in sets}
-    matrix: dict[str, Any] = {"seed0": 3000, "runs": 24, "sets": sets}
+    matrix: dict[str, Any] = {"seed0": SEED0, "runs": RUNS, "sets": sets}
     if "single" in by and "baseline" in by:
         matrix["risk_ratio"] = risk_ratio(by["single"], by["baseline"])
         matrix["risk_ratio_from"] = by["baseline"]["separation_violations"]
@@ -100,5 +104,49 @@ def main(prefix: str) -> None:
     print(f"wrote {out / 'matrix.json'} with {len(sets)} sets")
 
 
+def table_row(label: str, s: dict[str, Any]) -> str:
+    """One README results row; tests/test_published_results.py builds the same string."""
+    sep = s["min_separation_m"]
+    return (
+        f"| {label} | {s['separation_violations']}/{s['runs']} ({s['lowc_events']}) | {sep['min']:.1f} m "
+        f"| {s['encounters_detected']}/{s['encounters']} | {s['false_alarms_per_flight_hour']:.1f} "
+        f"| {s['completed_and_landed']}/{s['runs']} ({s['returned_early_for_traffic']}) |"
+    )
+
+
+def bird_row(label: str, s: dict[str, Any]) -> str:
+    return (
+        f"| {label} | {s['bird_tracks']} | {s['birds_reported_as_drone']} "
+        f"| {s['drone_tracks_reported_as_drone']}/{s['drone_tracks']} |"
+    )
+
+
+def print_tables() -> None:
+    m = json.loads((ROOT / "docs" / "results" / "matrix.json").read_text(encoding="utf-8"))
+    print(
+        "| configuration | runs inside 12 m (entries) | closest approach "
+        "| encounters detected 3 s before 30 m | false alarms per flight hour "
+        "| missions completed (returned early for traffic) |"
+    )
+    print("|---|---|---|---|---|---|")
+    for st in m["sets"]:
+        print(table_row(st["label"], st["summary"]))
+    print()
+    head = [
+        "birds in the area",
+        "bird tracks",
+        "bird tracks reported as a drone",
+        "drone tracks reported as a drone",
+    ]
+    print("| " + " | ".join(head) + " |")
+    print("|---|---|---|---|")
+    for st in m["sets"]:
+        if st["key"].startswith("birds"):
+            print(bird_row(st["label"], st["summary"]))
+
+
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "runs/m")
+    if len(sys.argv) > 1 and sys.argv[1] == "--table":
+        print_tables()
+    else:
+        main(sys.argv[1] if len(sys.argv) > 1 else "runs/m")

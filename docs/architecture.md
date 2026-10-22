@@ -18,7 +18,8 @@ flowchart LR
     end
     subgraph perception [Perception, 10 Hz]
         C[camera frame] --> D[sky-target detector]
-        D --> K[GNN + EKF tracker]
+        D --> K[GNN + EKF tracker<br/>+ bird/drone flicker classifier]
+        A[ground microphones, 1 Hz] --> Q[triangulated cues]
     end
     subgraph decide [Autonomy, 20 Hz]
         V --> EX[mission executive<br/>behaviours, contact pre-emption]
@@ -26,8 +27,12 @@ flowchart LR
         X --> EX
         EX --> S[runtime safety monitor]
         K --> S
+        Q --> EX
+        Q --> S
     end
     S --> AP[autopilot<br/>sim or ArduPilot GUIDED]
+    K --> SAP[SAPIENT reports<br/>to a C-UAS fusion node]
+    Q --> SAP
     AP --> NAV[navigation state] --> EX
     NAV --> S
 ```
@@ -46,6 +51,10 @@ flowchart LR
 | `perception/render.py` | synthetic camera frames | detector runs on pixels, so false alarms are emergent |
 | `perception/detector.py` | small dark targets against sky | black top-hat, robust threshold, horizon mask, darker-than-sky test |
 | `perception/tracker.py` | multi-target tracking | bearing + log-range EKF, GNN association, M-of-N confirmation |
+| `perception/classify.py` | bird or drone | wing-beat flicker in the track's brightness, against sensor noise |
+| `perception/acoustic.py` | ground microphone network | bearings triangulated into horizontal fixes; altitude unknown, so a column |
+| `interop/sapient.py` | reports to other systems | SAPIENT ICD v7 registration, status, detection; UTM coordinates |
+| `sim/birds.py` | birds in the simulated sky | intermittent flapping and gliding, wandering paths |
 | `safety/monitor.py` | run-time assurance | every setpoint filtered; latched RTL/LAND |
 | `safety/energy.py` | battery planning model | shared by validator and monitor |
 | `control/` | cascaded position/velocity + SE(3) attitude, mixer | what the simulated autopilot runs |
@@ -70,5 +79,7 @@ flowchart LR
   1:1 onto `SET_POSITION_TARGET_LOCAL_NED`.
 * **`VehicleState`**: the navigation solution (an estimate, never truth).
 * **`Detection` / `TrackEstimate`**: pixel detections in, world-frame tracks with
-  covariance out. A learned detector can replace the classical one behind the
-  same `Detection` type.
+  covariance out, plus the probability the track is a drone rather than a bird. A
+  learned detector can replace the classical one behind the same `Detection` type.
+* **SAPIENT messages**: what leaves the system for a counter-UAS fusion node
+  ([interop.md](interop.md)).
