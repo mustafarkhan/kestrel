@@ -385,6 +385,8 @@ class Executive:
         self.yield_pos: Vec | None = None
         self.yield_vel: Vec = np.zeros(3)
         self.yield_clear_since: float | None = None
+        self.yield_ref: ReferenceFilter | None = None
+        self.yield_last_t = 0.0
         self.watch_radius_m = 70.0
         self.watch_memory_s = 180.0
         self.home = np.array(world.home, dtype=float)
@@ -557,7 +559,7 @@ class Executive:
         return worst
 
     def _deconflict(self, ctx: Context, sp: Setpoint | None) -> Setpoint | None:
-        """Pause path-following behaviours while they would fly into a known contact."""
+        """Give way: suspend path-following while it would fly into a known contact."""
         if not isinstance(self.current, PathB) or self.aborted == "land":
             self.yield_since = None
             return sp
@@ -570,9 +572,15 @@ class Executive:
             self.yield_since = ctx.t
             self.yield_pos = ctx.state.pos.copy()
             self.yield_vel = np.asarray(sp.vel, dtype=float).copy()
+            lim = self.cfg.safety
+            self.yield_ref = ReferenceFilter(
+                ctx.state.pos, ctx.state.vel, omega=1.2, v_max=lim.max_horizontal_speed * 0.75,
+                a_max=lim.max_acceleration, vz_max=1.0,
+            )  # fmt: skip
+            self.yield_last_t = ctx.t
             self.yield_clear_since = None
             self._log(ctx.t, "yield", f"{self.current.name} paused for track {tr.ident}")
-        # yielding: hold position until the planned motion is conflict-free for a while
+        # yielding: keep clear until the planned motion is conflict-free for a while
         if self._conflict(ctx, self.yield_vel) is None:
             if self.yield_clear_since is None:
                 self.yield_clear_since = ctx.t
@@ -589,8 +597,33 @@ class Executive:
                 self._advance(ctx)
             self.yield_since = None
             return self.current.step(ctx) if self.current is not None else None
-        assert self.yield_pos is not None
-        return Setpoint(pos=self.yield_pos, yaw=ctx.state.yaw)
+        return self._keep_clear(ctx)
+
+    def _keep_clear(self, ctx: Context) -> Setpoint:
+        """While yielding, stay at the standoff distance from the nearest contact in view.
+
+        Holding still is the wrong way to give way to traffic that circles back; this keeps
+        the gap open as the contact moves ("remain well clear"), at the current altitude.
+        """
+        assert self.yield_pos is not None and self.yield_ref is not None
+        seen = [tr for tr in ctx.tracks if ctx.t - tr.last_hit_t < 2.0]
+        dt = max(ctx.t - self.yield_last_t, 1e-3)
+        self.yield_last_t = ctx.t
+        if not seen:
+            pos, vel, acc = self.yield_ref.step(self.yield_pos, np.zeros(3), dt)
+            return Setpoint(pos=pos, vel=vel, acc=acc, yaw=ctx.state.yaw)
+        tr = min(seen, key=lambda x: float(np.linalg.norm(x.pos - ctx.state.pos)))
+        away = ctx.state.pos - tr.pos
+        hd = math.hypot(float(away[0]), float(away[1]))
+        u = np.array([away[0], away[1], 0.0]) / hd if hd > 0.5 else np.array([1.0, 0.0, 0.0])
+        keep = max(self.mission.contact_standoff_m, self.cfg.safety.min_separation + YIELD_MARGIN_M)
+        goal = self.yield_pos.copy() if hd >= keep else np.array([tr.pos[0], tr.pos[1], 0.0]) + u * keep
+        goal[2] = self.yield_pos[2]
+        if hd < keep:
+            self.yield_pos = goal.copy()  # remember the retreat, so we do not drift back in
+        pos, vel, acc = self.yield_ref.step(goal, np.zeros(3), dt)
+        los = tr.pos - ctx.state.pos
+        return Setpoint(pos=pos, vel=vel, acc=acc, yaw=math.atan2(los[1], los[0]))
 
     def step(self, ctx: Context) -> Setpoint | None:
         sp = self._deconflict(ctx, self._step(ctx))
