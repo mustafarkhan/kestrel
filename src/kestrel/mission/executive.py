@@ -51,6 +51,12 @@ from kestrel.safety.monitor import SafetyRequest
 from kestrel.types import Setpoint, VehicleState
 from kestrel.vehicle.base import Vehicle
 
+SWEEP_DEG = 40.0  # camera sweep either side of the direction of travel
+YIELD_HORIZON_S = 10.0  # look this far ahead for a conflict with a known contact
+YIELD_MARGIN_M = 10.0  # yield if the predicted closest approach is under min separation + this
+YIELD_CLEAR_S = 2.0  # conflict must stay clear this long before the path resumes
+YIELD_MAX_S = 60.0  # give up on the task (skip it) if it stays blocked this long
+
 
 @dataclass
 class Context:
@@ -128,8 +134,12 @@ class PathB(Behaviour):
         face: Vec | None = None,
         min_time_s: float = 0.0,
         repeat: bool = False,
+        sweep_deg: float = 0.0,
+        sweep_period_s: float = 12.0,
     ) -> None:
         self.name = name
+        self.sweep = math.radians(sweep_deg)
+        self.sweep_period = sweep_period_s
         self.points = np.asarray(points, dtype=float)
         self.speed = speed
         self.a_max = a_max
@@ -174,7 +184,11 @@ class PathB(Behaviour):
             if d[k] < 3.0:
                 self.progress_idx += k
         if self.yaw_mode == "along" and float(np.linalg.norm(sp.vel[0:2])) > 0.8:
-            self.yaw = math.atan2(sp.vel[1], sp.vel[0])
+            heading = math.atan2(sp.vel[1], sp.vel[0])
+            # Sweep the camera across the direction of travel: one forward camera then
+            # covers about hfov + 2*sweep instead of hfov, so crossing traffic is seen.
+            phase = 2 * math.pi * (ctx.t - (self.started_at or 0.0)) / self.sweep_period
+            self.yaw = wrap_pi(heading + self.sweep * math.sin(phase))
         elif self.yaw_mode == "face" and self.face is not None:
             self.yaw = math.atan2(self.face[1] - sp.pos[1], self.face[0] - sp.pos[0])
         elif self.yaw_mode == "scan":
@@ -225,10 +239,17 @@ class TrackB(Behaviour):
     name = "track"
 
     def __init__(
-        self, params: StandoffParams, duration_s: float, a_max: float, lost_timeout_s: float = 20.0
+        self,
+        params: StandoffParams,
+        duration_s: float,
+        a_max: float,
+        a_max_close: float | None = None,
+        lost_timeout_s: float = 20.0,
     ) -> None:
         self.p = params
         self.a_max = a_max
+        self.a_max_close = a_max_close if a_max_close is not None else a_max
+        self.close = False
         self.ref: ReferenceFilter | None = None
         self.last_t = 0.0
         self.last_pos: Vec | None = None
@@ -287,6 +308,12 @@ class TrackB(Behaviour):
         self.last_pos = tr.pos.copy()
         goal = standoff_setpoint(ctx.state.pos, tr.pos, tr.vel, self.p, self.direction)
         assert self.ref is not None
+        # Inside 75% of the standoff the target is closing on us: stop smoothing for comfort
+        # and back off with the full acceleration budget (hysteresis avoids chattering).
+        rng = float(np.linalg.norm(tr.pos - ctx.state.pos))
+        self.close = rng < (0.85 if self.close else 0.75) * self.p.standoff_m
+        self.ref.a_max = self.a_max_close if self.close else self.a_max
+        self.ref.omega = 1.6 if self.close else 0.8
         dt = max(ctx.t - self.last_t, 1e-3)
         self.last_t = ctx.t
         pos, vel, acc = self.ref.step(goal.pos, goal.vel, dt)
@@ -354,6 +381,10 @@ class Executive:
         self.reported_contacts: set[int] = set()
         self.contact_cooldown_until = 0.0
         self.last_contact: tuple[float, Vec] | None = None  # (time, position)
+        self.yield_since: float | None = None
+        self.yield_pos: Vec | None = None
+        self.yield_vel: Vec = np.zeros(3)
+        self.yield_clear_since: float | None = None
         self.watch_radius_m = 70.0
         self.watch_memory_s = 180.0
         self.home = np.array(world.home, dtype=float)
@@ -379,12 +410,12 @@ class Executive:
         if isinstance(task, TakeoffTask):
             return TakeoffB(task.altitude)
         if isinstance(task, GotoTask):
-            return PathB("goto", g.points, g.speed, a)
+            return PathB("goto", g.points, g.speed, a, sweep_deg=SWEEP_DEG)
         if isinstance(task, OrbitTask):
             c = g.points.mean(axis=0) if task.laps >= 1 else None
             return PathB("orbit", g.points, g.speed, a, yaw_mode="face" if c is not None else "along", face=c)
         if isinstance(task, SurveyTask):
-            return PathB("survey", g.points, g.speed, a)
+            return PathB("survey", g.points, g.speed, a, sweep_deg=SWEEP_DEG)
         if isinstance(task, SearchTask):
             return PathB(
                 "search", g.points, g.speed, a, yaw_mode="scan", min_time_s=task.duration_s, repeat=True
@@ -392,7 +423,12 @@ class Executive:
         if isinstance(task, HoldTask):
             return HoldB(task.duration_s)
         if isinstance(task, TrackTask):
-            return TrackB(self._standoff(task.standoff_m), task.duration_s, lim.max_acceleration * 0.6)
+            return TrackB(
+                self._standoff(task.standoff_m),
+                task.duration_s,
+                lim.max_acceleration * 0.6,
+                lim.max_acceleration,
+            )
         if isinstance(task, ReturnHomeTask):
             return self._rtl_behaviour(ctx)
         if isinstance(task, LandTask):
@@ -403,7 +439,7 @@ class Executive:
         lim = self.cfg.safety
         alt = float(np.clip(ctx.state.pos[2], lim.min_altitude + 2.0, lim.max_altitude))
         pts = np.array([[ctx.state.pos[0], ctx.state.pos[1], alt], [self.home[0], self.home[1], alt]])
-        return PathB("return_home", pts, lim.rtl_speed, lim.max_acceleration * 0.6)
+        return PathB("return_home", pts, lim.rtl_speed, lim.max_acceleration * 0.6, sweep_deg=SWEEP_DEG)
 
     def _activate(self, b: Behaviour, ctx: Context) -> None:
         self.current = b
@@ -480,6 +516,7 @@ class Executive:
             self._standoff(self.mission.contact_standoff_m),
             self.mission.contact_track_s,
             self.cfg.safety.max_acceleration * 0.6,
+            self.cfg.safety.max_acceleration,
         )
         b.target_id = tr.ident
         self._log(ctx.t, "interrupt", f"{self.current.name} -> track {tr.ident}")
@@ -499,8 +536,64 @@ class Executive:
             return None
         return pos
 
+    def _conflict(self, ctx: Context, planned_vel: Vec) -> TrackEstimate | None:
+        """A known contact whose predicted closest approach to our planned motion is too close.
+
+        Straight-line prediction for both aircraft over ``YIELD_HORIZON_S``; the same
+        closest-point-of-approach test manned aviation uses for traffic advisories.
+        """
+        need = self.cfg.safety.min_separation + YIELD_MARGIN_M
+        worst, worst_d = None, math.inf
+        for tr in ctx.tracks:
+            if ctx.t - tr.last_hit_t > 5.0:
+                continue
+            r = ctx.state.pos - tr.pos
+            v = planned_vel - tr.vel
+            vv = float(v @ v)
+            t_cpa = 0.0 if vv < 1e-6 else float(np.clip(-(r @ v) / vv, 0.0, YIELD_HORIZON_S))
+            d = float(np.linalg.norm(r + v * t_cpa))
+            if d < need and d < worst_d:
+                worst, worst_d = tr, d
+        return worst
+
+    def _deconflict(self, ctx: Context, sp: Setpoint | None) -> Setpoint | None:
+        """Pause path-following behaviours while they would fly into a known contact."""
+        if not isinstance(self.current, PathB) or self.aborted == "land":
+            self.yield_since = None
+            return sp
+        if self.yield_since is None:
+            if sp is None:
+                return sp
+            tr = self._conflict(ctx, np.asarray(sp.vel))
+            if tr is None:
+                return sp
+            self.yield_since = ctx.t
+            self.yield_pos = ctx.state.pos.copy()
+            self.yield_vel = np.asarray(sp.vel, dtype=float).copy()
+            self.yield_clear_since = None
+            self._log(ctx.t, "yield", f"{self.current.name} paused for track {tr.ident}")
+        # yielding: hold position until the planned motion is conflict-free for a while
+        if self._conflict(ctx, self.yield_vel) is None:
+            if self.yield_clear_since is None:
+                self.yield_clear_since = ctx.t
+        else:
+            self.yield_clear_since = None
+        cleared = self.yield_clear_since is not None and ctx.t - self.yield_clear_since >= YIELD_CLEAR_S
+        if cleared or ctx.t - self.yield_since >= YIELD_MAX_S:
+            if cleared:
+                self._log(ctx.t, "resume", f"{self.current.name} (traffic clear)")
+                self.current.resume(ctx)
+            else:
+                self._log(ctx.t, "skip", f"{self.current.name} blocked for {YIELD_MAX_S:.0f} s")
+                self.current = None
+                self._advance(ctx)
+            self.yield_since = None
+            return self.current.step(ctx) if self.current is not None else None
+        assert self.yield_pos is not None
+        return Setpoint(pos=self.yield_pos, yaw=ctx.state.yaw)
+
     def step(self, ctx: Context) -> Setpoint | None:
-        sp = self._step(ctx)
+        sp = self._deconflict(ctx, self._step(ctx))
         watch = self._watch_target(ctx)
         if sp is not None and watch is not None:
             d = watch - ctx.state.pos

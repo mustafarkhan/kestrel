@@ -147,7 +147,7 @@ class SafetyMonitor:
                 # than vertical speed authority.
                 h = float(np.hypot(rel[0], rel[1]))
                 u = np.array([rel[0] / h, rel[1] / h, 0.0]) if h > 2.0 else rel / rd
-                required = max(float(tr.vel @ u), 0.0) + 1.0 + 0.5 * (need - rd)
+                required = max(float(tr.vel @ u), 0.0) + 2.0 + 1.0 * (need - rd)
                 outward = float(vel @ u)
                 if outward < required:
                     vel = vel + (required - outward) * u

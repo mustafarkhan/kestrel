@@ -66,9 +66,11 @@ def _one(args: tuple[Config, Scenario]) -> dict[str, Any]:
     return m
 
 
-def run_benchmark(cfg: Config, base: Scenario, runs: int, out: Path, jobs: int = 2) -> dict[str, Any]:
+def run_benchmark(
+    cfg: Config, base: Scenario, runs: int, out: Path, jobs: int = 2, seed0: int = 1000
+) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
-    scenarios = [make_scenario(base, i) for i in range(runs)]
+    scenarios = [make_scenario(base, i, seed0) for i in range(runs)]
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         results = list(pool.map(_one, [(cfg, s) for s in scenarios]))
     cols = [
@@ -99,6 +101,7 @@ def summarise(rs: list[dict[str, Any]]) -> dict[str, Any]:
         [r["energy_wh"] / r["est_energy_wh"] for r in rs if r.get("energy_wh") and r.get("est_energy_wh")]
     )
     return {
+        "seed0": int(str(rs[0]["seed"])) if rs else None,
         "runs": len(rs),
         "completed_and_landed": sum(1 for r in rs if r.get("completed") and r.get("landed")),
         "runs_with_contact_tracked": len(tracked),
