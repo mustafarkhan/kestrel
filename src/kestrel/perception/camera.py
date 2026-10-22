@@ -63,14 +63,16 @@ class Camera:
     def intrinsics(self) -> Vec:
         return np.array([[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1.0]])
 
-    def pose(self, pos: Vec, quat: Vec, tilt_deg: float | None = None) -> CameraPose:
+    def pose(
+        self, pos: Vec, quat: Vec, tilt_deg: float | None = None, yaw_offset_deg: float = 0.0
+    ) -> CameraPose:
         r_wb = quat_to_rot(quat)
         position = pos + r_wb @ self.offset
         if not self.p.gimbal:
             return CameraPose(position=position, r_world_cam=r_wb @ self.r_body_cam)
         tilt = self.p.pitch_up_deg if tilt_deg is None else tilt_deg
         tilt = min(max(tilt, self.p.gimbal_min_deg), self.p.gimbal_max_deg)
-        r = rot_z(yaw_of(quat)) @ _cam_axes(math.radians(tilt))
+        r = rot_z(yaw_of(quat) + math.radians(yaw_offset_deg)) @ _cam_axes(math.radians(tilt))
         return CameraPose(position=position, r_world_cam=r)
 
     def project(self, pose: CameraPose, point_world: Vec) -> tuple[float, float, float] | None:

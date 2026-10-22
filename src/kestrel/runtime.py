@@ -174,12 +174,15 @@ def run(
         if perception_enabled and t >= next_cam:
             next_cam += cam_period
             s = world.quad.state
-            true_pose = perc.camera.pose(s.pos, s.quat, tilt).jittered(gimbal_rng, jitter)
-            est_pose = perc.camera.pose(st.pos, st.quat, tilt)
             targets = [(p, span[i], _span_yaw(v)) for i, p, v in intruders]
-            img = perc.renderer.render(true_pose, targets, cfg.camera.noise_sigma)
-            dets = perc.detector.detect(img, est_pose)
-            pending.append((t + cfg.camera.latency_s, t, dets, est_pose))
+            for off in cfg.camera.yaw_offsets_deg:
+                pose_c = perc.camera.pose(s.pos, s.quat, tilt, off).jittered(gimbal_rng, jitter)
+                est_c = perc.camera.pose(st.pos, st.quat, tilt, off)
+                img_c = perc.renderer.render(pose_c, targets, cfg.camera.noise_sigma)
+                dets_c = perc.detector.detect(img_c, est_c)
+                pending.append((t + cfg.camera.latency_s, t, dets_c, est_c))
+                if off == cfg.camera.yaw_offsets_deg[0]:
+                    true_pose, img, dets = pose_c, img_c, dets_c
             frame_count += 1
             if record_every and frame_count % record_every == 0:
                 ests = perc.tracker.estimates(t, confirmed_only=False)
@@ -228,8 +231,12 @@ def run(
         if intruders:
             tpos = intruders[0][1]
             log.target.append(tpos.copy())
-            pose_now = perc.camera.pose(s.pos, s.quat, tilt)
-            log.target_in_fov.append(perc.camera.in_view(pose_now, tpos))
+            log.target_in_fov.append(
+                any(
+                    perc.camera.in_view(perc.camera.pose(s.pos, s.quat, tilt, off), tpos)
+                    for off in cfg.camera.yaw_offsets_deg
+                )
+            )
             follow = getattr(executive.current, "target_id", None)
             chosen = [tr for tr in tracks if tr.ident == follow] or sorted(
                 tracks, key=lambda tr: float(np.linalg.norm(tr.pos - tpos))

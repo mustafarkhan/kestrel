@@ -1,0 +1,19 @@
+# Five-camera ring: full 360 degree coverage (5 x 75 deg hfov at 72 deg spacing).
+# Same vehicle and safety limits as default.yaml; only the sensor layout differs.
+vehicle:
+  mass: 1.6
+  battery_wh: 77.0
+camera:
+  width: 480
+  height: 360
+  hfov_deg: 75.0
+  pitch_up_deg: 8.0
+  rate_hz: 10.0
+  yaw_offsets_deg: [0.0, 72.0, 144.0, -144.0, -72.0]
+safety:
+  min_altitude: 5.0
+  max_altitude: 60.0
+  max_horizontal_speed: 8.0
+  fence_margin: 8.0
+  min_separation: 12.0
+  energy_reserve_fraction: 0.2

@@ -128,3 +128,17 @@ def test_tracker_follows_one_target_through_misses(cfg: Config, cam: Camera) -> 
     assert len(errs) > 360  # confirmed on the true target almost the whole time
     assert float(np.median(errs)) < 5.0
     assert len({e.ident for e in tracker.estimates(40.0)}) == 1
+
+
+def test_camera_ring_covers_all_bearings(cfg: Config) -> None:
+    ring = cfg.camera.model_copy(update={"yaw_offsets_deg": (0.0, 72.0, 144.0, -144.0, -72.0)})
+    cam = Camera(ring, cfg.vehicle.camera_offset)
+    q = quat_from_euler(0.0, 0.0, 0.3)
+    obs = np.array([0.0, 0.0, 20.0])
+    for bearing in range(0, 360, 5):
+        b = 0.3 + math.radians(bearing)
+        p = obs + 40.0 * np.array([math.cos(b), math.sin(b), 0.08])
+        seen = [off for off in ring.yaw_offsets_deg if cam.in_view(cam.pose(obs, q, 8.0, off), p)]
+        assert seen, f"bearing {bearing} deg not covered"
+    behind = obs + 40.0 * np.array([math.cos(0.3 + math.pi), math.sin(0.3 + math.pi), 0.08])
+    assert not cam.in_view(cam.pose(obs, q, 8.0, 0.0), behind)  # the forward camera alone is blind here

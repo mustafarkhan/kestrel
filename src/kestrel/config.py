@@ -69,6 +69,9 @@ class CameraParams(_Strict):
     gimbal_rate_deg_s: float = 90.0
     gimbal_jitter_deg: float = 0.15  # residual stabilisation error
     rate_hz: float = 10.0
+    # Camera layout: yaw of each camera relative to the nose. [0] is one forward camera;
+    # [0, 72, 144, -144, -72] is a five-camera ring with full 360 degree coverage at 75 deg hfov.
+    yaw_offsets_deg: tuple[float, ...] = (0.0,)
     noise_sigma: float = 2.0  # grey levels (0..255)
     latency_s: float = 0.05
 

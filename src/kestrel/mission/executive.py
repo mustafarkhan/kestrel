@@ -308,10 +308,10 @@ class TrackB(Behaviour):
         self.last_pos = tr.pos.copy()
         goal = standoff_setpoint(ctx.state.pos, tr.pos, tr.vel, self.p, self.direction)
         assert self.ref is not None
-        # Inside 75% of the standoff the target is closing on us: stop smoothing for comfort
+        # Inside 85% of the standoff the target is closing on us: stop smoothing for comfort
         # and back off with the full acceleration budget (hysteresis avoids chattering).
         rng = float(np.linalg.norm(tr.pos - ctx.state.pos))
-        self.close = rng < (0.85 if self.close else 0.75) * self.p.standoff_m
+        self.close = rng < (0.95 if self.close else 0.85) * self.p.standoff_m
         self.ref.a_max = self.a_max_close if self.close else self.a_max
         self.ref.omega = 1.6 if self.close else 0.8
         dt = max(ctx.t - self.last_t, 1e-3)
