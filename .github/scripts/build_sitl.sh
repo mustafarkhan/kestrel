@@ -15,20 +15,28 @@ mkdir -p "$WORK" "$OUT"
 step() {
   echo "== $*" | tee -a "$LOG"
   if ! "$@" >>"$LOG" 2>&1; then
-    echo "::error title=SITL build failed::command: $*"
-    tail -n 40 "$LOG" | sed 's/%/%25/g' | while IFS= read -r line; do echo "::error::${line}"; done
+    # One multi-line annotation (GitHub shows only a few per step): error lines first, then the tail.
+    {
+      echo "command: $*"
+      grep -iE "error|no module|failed|not found" "$LOG" | grep -v "Generating C" | tail -n 15
+      echo "--- last lines ---"
+      tail -n 15 "$LOG"
+    } | sed -e 's/%/%25/g' -e 's/\r/%0D/g' | awk 'BEGIN{ORS="%0A"} {print}' | sed 's/^/::error title=SITL build failed::/'
+    echo
     exit 1
   fi
 }
 
-python -m pip install --quiet pexpect future
+# ArduPilot's DroneCAN generator imports pkg_resources, which Python 3.12+ environments no longer
+# include and setuptools >= 81 removes.
+python -m pip install --quiet pexpect future "setuptools<81"
 # empy 3.3.4 is a single module; vendor it (its setup.py does not build on new setuptools)
 mkdir -p "$WORK/pylib" "$WORK/empy"
 step python -m pip download --no-deps --no-binary :all: "empy==3.3.4" -d "$WORK/empy"
 step tar xzf "$WORK/empy/empy-3.3.4.tar.gz" -C "$WORK/empy"
 cp "$WORK/empy/empy-3.3.4/em.py" "$WORK/pylib/"
 export PYTHONPATH="$WORK/pylib"
-step python -c "import em, pexpect, future; print('python deps ok', em.__version__)"
+step python -c "import em, pexpect, future, pkg_resources; print('python deps ok', em.__version__)"
 
 step git clone --depth 1 --branch "$REF" https://github.com/ArduPilot/ardupilot.git "$WORK/ardupilot"
 cd "$WORK/ardupilot"
