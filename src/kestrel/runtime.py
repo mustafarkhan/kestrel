@@ -25,6 +25,7 @@ from kestrel.mission.llm import ChatBackend, MissionPlanner, PlanResult
 from kestrel.mission.parser import parse_emergency
 from kestrel.mission.schema import Mission
 from kestrel.mission.validator import ValidationReport, validate
+from kestrel.perception.acoustic import AcousticFix, AcousticNetwork
 from kestrel.perception.camera import Camera, CameraPose
 from kestrel.perception.detector import Detection, SkyTargetDetector
 from kestrel.perception.render import SkyRenderer
@@ -108,6 +109,16 @@ class Perception:
         self.tracker = MultiTargetTracker(cfg.tracker, self.camera)
 
 
+def _cue_estimate(fix: AcousticFix, observer_alt: float, ident: int) -> TrackEstimate:
+    """An acoustic fix as a contact: a vertical column at our altitude (height is unknown)."""
+    cov = np.zeros((6, 6))
+    cov[0:2, 0:2] = fix.cov_xy
+    cov[2, 2] = 1.0
+    cov[3:6, 3:6] = np.eye(3) * 25.0
+    pos = np.array([fix.xy[0], fix.xy[1], observer_alt])
+    return TrackEstimate(ident, pos, np.zeros(3), cov, True, 0, fix.t)
+
+
 def _span_yaw(vel: Vec) -> float:
     return math.atan2(vel[1], vel[0]) if float(np.linalg.norm(vel[0:2])) > 0.2 else 0.0
 
@@ -155,6 +166,14 @@ def run(
     monitor = SafetyMonitor(cfg.safety, cfg.vehicle, scenario.world, separation=avoidance)
     matched_ids: set[int] = set()
     confirmed_ids: set[int] = set()
+    acoustic = (
+        AcousticNetwork(cfg.acoustic, scenario.world, np.random.default_rng(scenario.seed + 91))
+        if cfg.acoustic.enabled and perception_enabled
+        else None
+    )
+    next_acoustic = 0.0
+    acoustic_pending: list[tuple[float, AcousticFix]] = []
+    acoustic_fixes: list[AcousticFix] = []
     cmds = sorted(operator_commands or [])
 
     substeps = max(1, round(1.0 / (cfg.autonomy_rate_hz * cfg.physics_dt)))
@@ -213,8 +232,17 @@ def run(
             perc.tracker.update(stamp, dets, pose)
         tracks: list[TrackEstimate] = perc.tracker.estimates(t)
 
+        # ---------------------------------------------------------- acoustic cueing
+        if acoustic is not None and t >= next_acoustic:
+            next_acoustic += 1.0 / cfg.acoustic.rate_hz
+            acoustic_pending += [(t + cfg.acoustic.latency_s, f) for f in acoustic.sense(t, intruders)]
+        while acoustic_pending and acoustic_pending[0][0] <= t:
+            acoustic_fixes.append(acoustic_pending.pop(0)[1])
+        acoustic_fixes = [f for f in acoustic_fixes if t - f.t < cfg.acoustic.cue_memory_s]
+        cues = [_cue_estimate(f, st.pos[2], -(k + 1)) for k, f in enumerate(acoustic_fixes)]
+
         # ---------------------------------------------------------- decide
-        ctx = Context(t=t, state=st, vehicle=vehicle, tracks=tracks)
+        ctx = Context(t=t, state=st, vehicle=vehicle, tracks=tracks, cues=cues)
         ctx_prev = ctx
         while cmds and cmds[0][0] <= t:
             _, text = cmds.pop(0)
@@ -226,7 +254,7 @@ def run(
         if monitor.latched is not SafetyRequest.NONE:
             executive.abort(monitor.latched, ctx, monitor.reasons[-1])
         sp = executive.step(ctx)
-        dec = monitor.filter(st, sp, tracks, executive.low_altitude_ok)
+        dec = monitor.filter(st, sp, tracks + cues, executive.low_altitude_ok)
         if dec.setpoint is not None:
             vehicle.set_setpoint(dec.setpoint)
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -56,6 +56,7 @@ YIELD_HORIZON_S = 6.0  # look this far ahead for a conflict with a known contact
 YIELD_MARGIN_M = 6.0  # yield if the predicted closest approach is under min separation + this
 YIELD_CLEAR_S = 2.0  # conflict must stay clear this long before the path resumes
 YIELD_MAX_S = 60.0  # give up on the task (skip it) if it stays blocked this long
+CUE_AGE_S = 3.0  # external cues arrive late (acoustic: ~1 s) so they are trusted for longer
 TRAFFIC_BUDGET_S = 120.0  # total time spent giving way before the mission returns home
 
 
@@ -64,7 +65,12 @@ class Context:
     t: float
     state: VehicleState
     vehicle: Vehicle
-    tracks: list[TrackEstimate]
+    tracks: list[TrackEstimate]  # camera tracks: may be shadowed
+    cues: list[TrackEstimate] = field(default_factory=list)  # external cues: point camera, keep clear
+
+    def contacts(self, max_age_s: float) -> list[TrackEstimate]:
+        """Camera tracks and external cues heard or seen within ``max_age_s``."""
+        return [tr for tr in [*self.tracks, *self.cues] if self.t - tr.last_hit_t < max_age_s]
 
 
 @dataclass
@@ -532,6 +538,13 @@ class Executive:
         for tr in ctx.tracks:
             if ctx.t - tr.last_hit_t < 1.0:
                 self.last_contact = (ctx.t, tr.pos.copy())
+        if not any(ctx.t - tr.last_hit_t < 1.0 for tr in ctx.tracks):
+            # nothing in view: let an external cue point the camera (acoustic, radar, ...)
+            cues = ctx.contacts(CUE_AGE_S) if ctx.cues else []
+            cues = [c for c in cues if c.ident < 0]
+            if cues:
+                near = min(cues, key=lambda c: float(np.linalg.norm(c.pos - ctx.state.pos)))
+                self.last_contact = (ctx.t, near.pos.copy())
         if self.last_contact is None or isinstance(self.current, TrackB | TakeoffB | LandB):
             return None
         t_seen, pos = self.last_contact
@@ -549,9 +562,7 @@ class Executive:
         """
         need = self.cfg.safety.min_separation + YIELD_MARGIN_M
         worst, worst_d = None, math.inf
-        for tr in ctx.tracks:
-            if ctx.t - tr.last_hit_t > 2.0:  # only contacts we are actually seeing
-                continue
+        for tr in ctx.contacts(2.0) + [c for c in ctx.cues if ctx.t - c.last_hit_t < CUE_AGE_S]:
             r = ctx.state.pos - tr.pos
             v = planned_vel - tr.vel
             vv = float(v @ v)
@@ -616,7 +627,7 @@ class Executive:
         the gap open as the contact moves ("remain well clear"), at the current altitude.
         """
         assert self.yield_pos is not None and self.yield_ref is not None
-        seen = [tr for tr in ctx.tracks if ctx.t - tr.last_hit_t < 2.0]
+        seen = ctx.contacts(2.0) + [c for c in ctx.cues if ctx.t - c.last_hit_t < CUE_AGE_S]
         dt = max(ctx.t - self.yield_last_t, 1e-3)
         self.yield_last_t = ctx.t
         if not seen:

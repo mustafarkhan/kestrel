@@ -76,6 +76,20 @@ class CameraParams(_Strict):
     latency_s: float = 0.05
 
 
+class AcousticParams(_Strict):
+    """Ground acoustic cueing network (off by default). Sources in perception/acoustic.py."""
+
+    enabled: bool = False
+    node_spacing_m: float = 100.0  # grid over the operating area
+    range_m: float = 250.0  # small quadcopter, conservative end of "hundreds to a few thousand m"
+    bearing_sigma_deg: float = 2.0  # single-node azimuth accuracy reported for fielded dishes
+    detection_probability: float = 0.8  # per node, per update
+    min_nodes: int = 2  # bearings needed to triangulate a fix
+    rate_hz: float = 1.0
+    latency_s: float = 1.0  # bearings are collected and correlated before a fix is published
+    cue_memory_s: float = 3.0  # how long a fix is used after it was heard
+
+
 class StateNoise(_Strict):
     """Noise on the navigation solution the autonomy sees (not the truth)."""
 
@@ -218,6 +232,7 @@ class Config(_Strict):
     control: ControlGains = ControlGains()
     camera: CameraParams = CameraParams()
     state_noise: StateNoise = StateNoise()
+    acoustic: AcousticParams = AcousticParams()
     detector: DetectorParams = DetectorParams()
     tracker: TrackerParams = TrackerParams()
     safety: SafetyLimits = SafetyLimits()
