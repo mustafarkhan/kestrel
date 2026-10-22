@@ -209,7 +209,10 @@ class IntruderConfig(_Strict):
     size: XY = (45.0, 25.0)  # pattern half-extent (x, y)
     speed: float = 5.0
     waypoints: list[XYZ] = Field(default_factory=list)
-    appear_at_s: float = 0.0
+    appear_at_s: float = 0.0  # time the intruder reaches its pattern
+    # A late intruder flies in from this far outside its pattern start (straight, level, at its
+    # speed) instead of appearing out of nowhere next to the observer.
+    ingress_m: float = 150.0
     span_m: float = 0.35
 
 

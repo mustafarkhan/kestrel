@@ -28,3 +28,21 @@ away.
 **Consequences.** Separation is guaranteed only against aircraft the sensor has
 seen. The Monte Carlo benchmark reports any residual violations rather than
 hiding them.
+
+## Second round: what remained, and a flaw in the benchmark itself
+
+Diagnosing the remaining incursions run by run (on the original set, then on a
+held-out set, then on a fresh set never used for tuning) found three distinct causes:
+
+| Cause | Fix |
+|---|---|
+| Path-following flew straight through a known contact | Yield on a predicted closest approach under 18 m within 6 s, then keep the 30 m standoff from the contact until the path is clear; return home after 2 minutes of giving way in total |
+| Escape pushed the setpoint along the 3-D line, so with the intruder above it dived at 2.5 m/s instead of sidestepping at 8 m/s | The separation push keeps altitude and moves horizontally |
+| Same-altitude traffic sits on the horizon, which the detector ignored below +1.5 deg | Search down to 1 deg below the horizon (0 false alarms in 160 cloudy frames); further below is not claimed |
+| Aircraft approaching from outside the forward camera's view | Optional sensors: an acoustic cueing network (`configs/acoustic.yaml`) or a five-camera ring (`configs/camera_ring.yaml`) |
+
+One incursion was not a guidance failure. The benchmark spawned late intruders
+directly at their pattern start, so an intruder could appear 6.6 m from the
+observer with nothing to detect beforehand. Late intruders now fly in from 150 m
+outside their pattern (`IntruderConfig.ingress_m`), as real traffic does; all
+published results use the corrected generator.

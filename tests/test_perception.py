@@ -144,3 +144,14 @@ def test_camera_ring_covers_all_bearings(cfg: Config) -> None:
         assert seen, f"bearing {bearing} deg not covered"
     behind = obs + 40.0 * np.array([math.cos(0.3 + math.pi), math.sin(0.3 + math.pi), 0.08])
     assert not cam.in_view(cam.pose(obs, q, 8.0, 0.0), behind)  # the forward camera alone is blind here
+
+
+def test_late_intruder_flies_in_instead_of_appearing() -> None:
+    cfg = IntruderConfig(pattern="orbit", center=(20, 90, 30), size=(20, 20), speed=4.0, appear_at_s=60.0)
+    it = Intruder(cfg)
+    first = it.state(60.0 - 150.0 / 4.0 + 0.1)  # 150 m ingress at 4 m/s starts 37.5 s early
+    assert first is not None and np.linalg.norm(first[0][0:2]) > 150.0  # starts far from home
+    before, at = it.state(59.99), it.state(60.0)
+    assert before is not None and at is not None
+    assert np.linalg.norm(before[0] - at[0]) < 0.1  # continuous where the ingress meets the pattern
+    assert it.state(0.0) is None  # not yet in the air

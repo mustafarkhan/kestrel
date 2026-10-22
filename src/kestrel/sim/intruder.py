@@ -46,7 +46,25 @@ class Intruder:
     def state(self, t: float) -> tuple[Vec, Vec] | None:
         tau = t - self.cfg.appear_at_s
         if tau < 0.0:
+            return self._ingress(tau)
+        return self._pattern(tau)
+
+    def _ingress(self, tau: float) -> tuple[Vec, Vec] | None:
+        """Before ``appear_at_s``: fly straight in towards the pattern start from outside."""
+        c = self.cfg
+        if c.appear_at_s <= 0.0 or c.ingress_m <= 0.0 or c.speed <= 0.0:
             return None
+        if -tau > c.ingress_m / c.speed:
+            return None
+        start = self._pattern(0.0)
+        assert start is not None
+        p0 = start[0]
+        out = np.array([p0[0], p0[1], 0.0])  # arrive from beyond the area, outward from home (origin)
+        n = float(np.linalg.norm(out))
+        u = out / n if n > 1e-6 else np.array([1.0, 0.0, 0.0])
+        return p0 + u * (-tau) * c.speed, -u * c.speed
+
+    def _pattern(self, tau: float) -> tuple[Vec, Vec] | None:
         c = self.cfg
         ax, ay = c.size
         if c.pattern == "lemniscate":
