@@ -57,27 +57,35 @@ def make_scenario(base: Scenario, i: int, seed0: int = 1000) -> Scenario:
     )
 
 
-def _one(args: tuple[Config, Scenario]) -> dict[str, Any]:
-    cfg, sc = args
-    res = run(BENCH_MISSION, cfg, sc)
+def _one(args: tuple[Config, Scenario, bool]) -> dict[str, Any]:
+    cfg, sc, avoidance = args
+    res = run(BENCH_MISSION, cfg, sc, avoidance=avoidance)
     m = compute_metrics(res)
+    m["avoidance"] = avoidance
     m["intruder"] = sc.intruders[0].pattern
     m["intruder_speed"] = round(sc.intruders[0].speed, 2)
     return m
 
 
 def run_benchmark(
-    cfg: Config, base: Scenario, runs: int, out: Path, jobs: int = 2, seed0: int = 1000
+    cfg: Config,
+    base: Scenario,
+    runs: int,
+    out: Path,
+    jobs: int = 2,
+    seed0: int = 1000,
+    avoidance: bool = True,
 ) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     scenarios = [make_scenario(base, i, seed0) for i in range(runs)]
     with ProcessPoolExecutor(max_workers=jobs) as pool:
-        results = list(pool.map(_one, [(cfg, s) for s in scenarios]))
+        results = list(pool.map(_one, [(cfg, s, avoidance) for s in scenarios]))
     cols = [
         "scenario", "intruder", "intruder_speed", "completed", "landed", "duration_s", "energy_wh",
         "est_energy_wh", "min_separation_m", "time_below_min_separation_s", "time_to_first_track_s",
         "tracking_time_s", "track_error_median_m", "track_error_p90_m", "target_in_fov_fraction",
-        "yields", "returned_for_traffic",
+        "yields", "returned_for_traffic", "encounter", "encounter_detected", "lowc_events",
+        "false_alarms", "flight_hours",
         "range_mean_m", "false_tracks", "final_distance_from_home_m",
     ]  # fmt: skip
     with open(out / "results.csv", "w", newline="", encoding="utf-8") as fh:
@@ -103,12 +111,20 @@ def summarise(rs: list[dict[str, Any]]) -> dict[str, Any]:
     )
     return {
         "seed0": int(str(rs[0]["seed"])) if rs else None,
+        "avoidance": bool(rs[0].get("avoidance", True)) if rs else True,
         "runs": len(rs),
         "completed_and_landed": sum(1 for r in rs if r.get("completed") and r.get("landed")),
         "returned_early_for_traffic": sum(1 for r in rs if r.get("returned_for_traffic")),
         "landed_safely": sum(1 for r in rs if r.get("landed")),
         "runs_with_contact_tracked": len(tracked),
         "separation_violations": int(sum(1 for r in rs if r.get("time_below_min_separation_s", 0) > 0)),
+        "lowc_events": int(sum(r.get("lowc_events", 0) for r in rs)),
+        "encounters": sum(1 for r in rs if r.get("encounter")),
+        "encounters_detected": sum(1 for r in rs if r.get("encounter_detected")),
+        "false_alarms_per_flight_hour": round(
+            sum(r.get("false_alarms", 0) for r in rs) / max(sum(r.get("flight_hours", 0) for r in rs), 1e-9),
+            2,
+        ),
         "min_separation_m": {"min": float(sep.min()), "median": float(np.median(sep))} if len(sep) else None,
         "time_to_first_track_s_median": float(np.median(_vals(rs, "time_to_first_track_s")))
         if len(_vals(rs, "time_to_first_track_s"))
@@ -121,3 +137,14 @@ def summarise(rs: list[dict[str, Any]]) -> dict[str, Any]:
         "energy_actual_over_estimate_median": float(np.median(energy_ratio)) if len(energy_ratio) else None,
         "final_distance_from_home_m_max": float(_vals(rs, "final_distance_from_home_m").max()),
     }
+
+
+def risk_ratio(mitigated: dict[str, Any], unmitigated: dict[str, Any]) -> float | None:
+    """Detect-and-avoid risk ratio: runs losing well clear with avoidance / without it.
+
+    Both summaries must cover the same encounters (same ``seed0`` and run count).
+    """
+    if mitigated.get("seed0") != unmitigated.get("seed0") or mitigated["runs"] != unmitigated["runs"]:
+        raise ValueError("risk ratio needs the same encounter set with and without avoidance")
+    base = unmitigated["separation_violations"]
+    return None if base == 0 else round(mitigated["separation_violations"] / base, 3)

@@ -93,6 +93,7 @@ class RunResult:
     completed: bool
     scenario: Scenario
     config: Config
+    false_confirmed: int = 0  # confirmed tracks that never matched a real aircraft (false alarms)
 
     @property
     def flown(self) -> bool:
@@ -132,7 +133,15 @@ def run(
     record_every: int = 0,
     perception_enabled: bool = True,
     record_downsample: int = 2,
+    avoidance: bool = True,
 ) -> RunResult:
+    """Fly one closed-loop mission.
+
+    ``avoidance=False`` is the unmitigated baseline that detect-and-avoid standards compare
+    against: same mission and traffic, but no contact handling, no yielding and no
+    separation filtering. The ratio of separation losses with and without avoidance is the
+    risk ratio.
+    """
     plan, report = plan_and_validate(command, cfg, scenario, backend)
     world = SimWorld(cfg, scenario)
     log = FlightLog()
@@ -141,8 +150,11 @@ def run(
 
     vehicle = SimVehicle(world, cfg.state_noise, seed=scenario.seed)
     perc = Perception(cfg, scenario.seed)
-    executive = Executive(report.mission, cfg, scenario.world)
-    monitor = SafetyMonitor(cfg.safety, cfg.vehicle, scenario.world)
+    mission = report.mission if avoidance else report.mission.model_copy(update={"on_contact": "report"})
+    executive = Executive(mission, cfg, scenario.world, avoidance=avoidance)
+    monitor = SafetyMonitor(cfg.safety, cfg.vehicle, scenario.world, separation=avoidance)
+    matched_ids: set[int] = set()
+    confirmed_ids: set[int] = set()
     cmds = sorted(operator_commands or [])
 
     substeps = max(1, round(1.0 / (cfg.autonomy_rate_hz * cfg.physics_dt)))
@@ -252,6 +264,10 @@ def run(
             log.track.append(np.full(3, np.nan))
             log.track_std.append(float("nan"))
         log.n_confirmed.append(len(tracks))
+        for tr in tracks:
+            confirmed_ids.add(tr.ident)
+            if any(float(np.linalg.norm(tr.pos - p)) < 15.0 for _, p, _ in intruders):
+                matched_ids.add(tr.ident)
 
         if executive.finished and not world.armed:
             break
@@ -264,6 +280,7 @@ def run(
         safety_counts=monitor.counts,
         safety_reasons=monitor.reasons,
         false_tracks=perc.tracker.false_tracks_spawned,
+        false_confirmed=len(confirmed_ids - matched_ids),
         energy_used_wh=world.energy_used_wh,
         landed=not world.armed and world.quad.on_ground,
         completed=executive.finished and executive.aborted is None,

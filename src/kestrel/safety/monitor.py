@@ -60,8 +60,11 @@ class SafetyDecision:
 
 
 class SafetyMonitor:
-    def __init__(self, limits: SafetyLimits, vehicle: VehicleParams, world: WorldConfig) -> None:
+    def __init__(
+        self, limits: SafetyLimits, vehicle: VehicleParams, world: WorldConfig, separation: bool = True
+    ) -> None:
         self.lim = limits
+        self.separation = separation  # False only for the unmitigated benchmark baseline
         self.fence = Geofence(world.fence)
         self.home = np.array(world.home, dtype=float)
         self.energy = EnergyModel(vehicle, limits)
@@ -116,7 +119,7 @@ class SafetyMonitor:
             self.counts[tag] += 1
 
         # separation from every confirmed track (first, so the fence has the final word)
-        for tr in tracks:
+        for tr in tracks if self.separation else []:
             # Monocular range comes from an assumed target size, so it is never better than
             # ``range_uncertainty_floor`` of the range however confident the filter claims to be.
             rng = float(np.linalg.norm(tr.pos - st.pos))

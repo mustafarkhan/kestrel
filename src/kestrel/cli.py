@@ -90,7 +90,9 @@ def cmd_bench(args: argparse.Namespace) -> int:
     from kestrel.bench import run_benchmark
 
     cfg, sc = _load(args)
-    summary = run_benchmark(cfg, sc, args.runs, Path(args.out), jobs=args.jobs, seed0=args.seed0)
+    summary = run_benchmark(
+        cfg, sc, args.runs, Path(args.out), jobs=args.jobs, seed0=args.seed0, avoidance=not args.no_avoidance
+    )
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -157,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         "--seed0", type=int, default=1000, help="first encounter seed (1000 tuning set, 2000 held-out set)"
     )
     p.add_argument("--jobs", type=int, default=2)
+    p.add_argument("--no-avoidance", action="store_true", help="unmitigated baseline for the risk ratio")
     p.add_argument("--out", default="runs/bench")
     common(p)
     p.set_defaults(func=cmd_bench)

@@ -366,7 +366,8 @@ class ExecutiveStatus:
 
 
 class Executive:
-    def __init__(self, mission: Mission, cfg: Config, world: WorldConfig) -> None:
+    def __init__(self, mission: Mission, cfg: Config, world: WorldConfig, avoidance: bool = True) -> None:
+        self.avoidance = avoidance
         self.mission = mission
         self.cfg = cfg
         self.world = world
@@ -562,7 +563,7 @@ class Executive:
 
     def _deconflict(self, ctx: Context, sp: Setpoint | None) -> Setpoint | None:
         """Give way: suspend path-following while it would fly into a known contact."""
-        if not isinstance(self.current, PathB) or self.aborted == "land":
+        if not self.avoidance or not isinstance(self.current, PathB) or self.aborted == "land":
             self.yield_since = None
             return sp
         if self.yield_since is None:

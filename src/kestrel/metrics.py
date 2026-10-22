@@ -1,4 +1,17 @@
-"""Run metrics, computed against ground truth the autonomy never sees."""
+"""Run metrics, computed against ground truth the autonomy never sees.
+
+Definitions follow the detect-and-avoid literature, scaled to small-drone encounters:
+
+* **Encounter detected** (after the Amazon AOT benchmark, which requires a track for
+  3 s before the intruder is within 300 m of a manned-aircraft-sized encounter): a
+  correct track held for ``DETECT_LEAD_S`` before the intruder first comes within
+  ``DETECT_RANGE_M``, Kestrel's 30 m standoff.
+* **False alarm**: a *confirmed* track that never corresponds to a real aircraft.
+  Short-lived tentative tracks are not alarms (they never reach the autonomy).
+* **Loss of well clear (LoWC)**: an entry into the ``min_separation`` sphere (12 m).
+  ASTM F3442's well-clear volume (610 m x 77 m) is defined for manned traffic; no
+  standard exists for drone-to-drone well clear, so Kestrel states its own.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +22,10 @@ import numpy as np
 
 from kestrel.geofence import Geofence
 from kestrel.runtime import RunResult
+
+DETECT_LEAD_S = 3.0
+DETECT_RANGE_M = 30.0
+TRACK_MATCH_M = 15.0
 
 
 def _nan(x: float) -> float | None:
@@ -43,6 +60,8 @@ def compute_metrics(r: RunResult) -> dict[str, Any]:
         min_fence_margin_m=round(min(fence.signed_distance(p) for p in pos[::10]), 1),
         final_distance_from_home_m=round(float(np.linalg.norm(pos[-1, 0:2] - home[0:2])), 2),
         false_tracks=r.false_tracks,
+        false_alarms=r.false_confirmed,
+        flight_hours=round(float(t[-1]) / 3600.0, 4),
         safety_interventions=dict(r.safety_counts),
         safety_latches=list(r.safety_reasons),
     )
@@ -54,7 +73,18 @@ def compute_metrics(r: RunResult) -> dict[str, Any]:
         m["min_separation_m"] = round(float(np.nanmin(sep)), 2)
         m["time_below_min_separation_s"] = round(float(np.sum(sep[present] < lim.min_separation) * dt), 2)
         trk = a["track"]
-        good = present & ~np.isnan(trk[:, 0]) & (np.linalg.norm(trk - tgt, axis=1) < 15.0)
+        good = present & ~np.isnan(trk[:, 0]) & (np.linalg.norm(trk - tgt, axis=1) < TRACK_MATCH_M)
+        below = sep[present] < lim.min_separation
+        m["lowc_events"] = int(np.sum(np.diff(np.concatenate([[0], below.astype(int)])) == 1))
+        inside = np.flatnonzero(present & (sep < DETECT_RANGE_M))
+        if len(inside):
+            k = int(inside[0])
+            window = (t > t[k] - DETECT_LEAD_S) & (t <= t[k])
+            m["encounter"] = True
+            m["encounter_detected"] = bool(good[window].all()) if window.any() else False
+        else:
+            m["encounter"] = False
+            m["encounter_detected"] = None
         first = np.argmax(good) if good.any() else None
         m["time_to_first_track_s"] = (
             _nan(float(t[first] - t[np.argmax(present)])) if first is not None else None
