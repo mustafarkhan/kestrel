@@ -47,29 +47,39 @@ protection. So the classifier can only change what is reported, not what is avoi
 
 ## Calibration and held-out check
 
-The noise coefficient (1.39) and threshold (2.0) were fitted on a calibration set of
+The noise coefficient (1.57) and threshold (2.0) were fitted on a calibration set of
 rendered sequences (seeds 200–649: drones, flapping birds and gliding birds at 20–140 m,
-moving camera, noisy cloudy sky).
+random headings, moving camera, noisy cloudy sky).
 
 | 15-frame windows, calibration set | threshold 1.5 | **2.0** | 2.5 |
 |---|---|---|---|
-| drones kept | 82% | **100%** | 100% |
-| flapping birds rejected | 90% | **80%** | 64% |
-| gliding birds rejected | 39% | **12%** | 3% |
+| drones kept | 91% | **100%** | 100% |
+| flapping birds rejected | 84% | **82%** | 69% |
+| gliding birds rejected | 29% | **5%** | 2% |
 
-On a separate held-out set (seeds 5000–5239, 3 s sequences, never used for fitting):
+A further rule came from a closed-loop check: distant birds (integrated darkness below
+about 100) were being called drones, because at that brightness sensor noise in the
+frame-to-frame change (about 0.22 in log flux) is as large as the wing-beat modulation of
+a bird seen side-on. Below that brightness the classifier now gives no opinion instead.
 
-| class | sequences | reported as drone |
-|---|---|---|
-| drones | 39 | 97% |
-| flapping birds | 67 | 31% |
-| gliding birds | 71 | 93% |
+On a separate held-out set (seeds 5000–5239, 3 s sequences, never used for fitting),
+with the reporting threshold of 0.6:
 
-The threshold leans towards keeping drones: missing a real drone costs more than
-reporting a bird. Gliding birds are reported as drones almost as often as drones are,
-because a gliding bird has no wing-beat to see. That is a property of the cue, not a
-tuning problem, and it is why the closed-loop result below is a reduction and not an
-elimination.
+| class | sequences | reported as drone | called bird | no opinion |
+|---|---|---|---|---|
+| drones | 31 | 81% | 0% | 19% (too faint) |
+| flapping birds | 22 | 27% | 73% | 0% |
+| gliding birds | 32 | 91% | 3% | 6% |
+
+No drone was called a bird. The threshold leans that way on purpose: missing a real drone
+costs more than reporting a bird. Gliding birds are reported as drones about as often as
+drones are, because a gliding bird has no wing-beat to see. That is a property of the
+cue, not a tuning problem, and it is why the closed-loop result below is a reduction and
+not an elimination.
+
+A side effect worth recording: seen side-on, a bird's wing-beat is mostly up-and-down
+motion and changes the silhouette's area less than when it flies towards or away from
+the camera, so aspect matters as much as range.
 
 ## Closed-loop result
 

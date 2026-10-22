@@ -58,6 +58,11 @@ YIELD_CLEAR_S = 2.0  # conflict must stay clear this long before the path resume
 YIELD_MAX_S = 60.0  # give up on the task (skip it) if it stays blocked this long
 CUE_AGE_S = 3.0  # external cues arrive late (acoustic: ~1 s) so they are trusted for longer
 TRAFFIC_BUDGET_S = 120.0  # total time spent giving way before the mission returns home
+# Giving way on the way home is capped separately: traffic circling near home could otherwise
+# hold the aircraft out indefinitely in short yields. Past it, the safety monitor alone keeps
+# separation (push away, escape velocity), which it does whatever the executive is doing.
+RETURN_YIELD_BUDGET_S = 30.0
+SAME_AIRCRAFT_GAP_S = 30.0  # a new track this soon after, and within reach of, a handled one is it
 
 
 DECLARE_P_UAV = 0.6  # a classified track is reported as a drone above this probability
@@ -408,6 +413,8 @@ class Executive:
         self.yield_ref: ReferenceFilter | None = None
         self.yield_last_t = 0.0
         self.yield_total_s = 0.0
+        self.return_yield_s = 0.0
+        self.handled_aircraft: dict[int, tuple[float, Vec]] = {}  # track id -> (last seen, position)
         self.watch_radius_m = 70.0
         self.watch_memory_s = 180.0
         self.home = np.array(world.home, dtype=float)
@@ -530,6 +537,7 @@ class Executive:
             for tr in ctx.drones()
             if tr.hits >= 8 and tr.pos_std < 15.0 and tr.ident not in self.handled_contacts
         ]
+        fresh = [tr for tr in fresh if not self._seen_before(tr, ctx.t)]
         if not fresh or ctx.t < self.contact_cooldown_until:
             return
         tr = max(fresh, key=lambda x: x.hits)
@@ -544,6 +552,24 @@ class Executive:
         b.target_id = tr.ident
         self._log(ctx.t, "interrupt", f"{self.current.name} -> track {tr.ident}")
         self._activate(b, ctx)
+
+    def _seen_before(self, tr: TrackEstimate, t: float) -> bool:
+        """Is this new track an aircraft already followed, re-acquired under a new track id?
+
+        Tracks are lost and restarted (out of view, behind cloud), and "if you see a drone,
+        follow it" means each aircraft once, not each track. A new track that appears within
+        ``SAME_AIRCRAFT_GAP_S`` of a handled aircraft's last sighting, inside the distance it
+        could have flown since, is taken to be that aircraft and inherits its handled status.
+        Two aircraft close together can be confused this way; the cost is not following the
+        second one, never a loss of separation, which does not depend on identity.
+        """
+        v_max = self.cfg.safety.intruder_max_speed
+        for t_seen, p_seen in self.handled_aircraft.values():
+            gap = t - t_seen
+            if gap <= SAME_AIRCRAFT_GAP_S and float(np.linalg.norm(tr.pos - p_seen)) <= 15.0 + v_max * gap:
+                self.handled_contacts.add(tr.ident)
+                return True
+        return False
 
     def _watch_target(self, ctx: Context) -> Vec | None:
         """Position the camera should watch instead of looking along the path, if any."""
@@ -589,6 +615,9 @@ class Executive:
         if not self.avoidance or not isinstance(self.current, PathB) or self.aborted == "land":
             self.yield_since = None
             return sp
+        homeward = self.current.name == "return_home"
+        if self.yield_since is None and homeward and self.return_yield_s >= RETURN_YIELD_BUDGET_S:
+            return sp
         if self.yield_since is None and self.yield_total_s >= TRAFFIC_BUDGET_S:
             # Budget spent and already returning home: stop giving way, or persistent traffic
             # could keep the aircraft out until the battery decides. Separation is still
@@ -625,10 +654,15 @@ class Executive:
         else:
             self.yield_clear_since = None
         cleared = self.yield_clear_since is not None and ctx.t - self.yield_clear_since >= YIELD_CLEAR_S
+        spent = homeward and self.return_yield_s + (ctx.t - self.yield_since) >= RETURN_YIELD_BUDGET_S
+        cleared = cleared or spent  # stop giving way on the way home; the safety monitor still separates
         if cleared or ctx.t - self.yield_since >= YIELD_MAX_S:
             self.yield_total_s += ctx.t - self.yield_since
+            if homeward:
+                self.return_yield_s += ctx.t - self.yield_since
             if cleared:
-                self._log(ctx.t, "resume", f"{self.current.name} (traffic clear)")
+                why = "giving-way budget for the way home spent" if spent else "traffic clear"
+                self._log(ctx.t, "resume", f"{self.current.name} ({why})")
                 self.current.resume(ctx)
             else:
                 self._log(ctx.t, "skip", f"{self.current.name} blocked for {YIELD_MAX_S:.0f} s")
@@ -683,6 +717,9 @@ class Executive:
         live = {tr.ident for tr in ctx.tracks}
         if isinstance(self.current, TrackB) and self.current.target_id is not None:
             self.handled_contacts.add(self.current.target_id)
+        for tr in ctx.tracks:
+            if tr.ident in self.handled_contacts and ctx.t - tr.last_hit_t < 1.0:
+                self.handled_aircraft[tr.ident] = (ctx.t, tr.pos.copy())
         self.handled_contacts &= live | {getattr(self.current, "target_id", -1)}
         guard = 0
         while self.current is not None and self.current.done(ctx) and guard < 4:

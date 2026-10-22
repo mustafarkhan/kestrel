@@ -92,9 +92,15 @@ def run_benchmark(
     seed0: int = 1000,
     avoidance: bool = True,
     intruders: int = 1,
+    first: int = 0,
 ) -> dict[str, Any]:
+    """Fly encounters ``first .. first + runs - 1`` of the set starting at ``seed0``.
+
+    A large set can be split into parts with ``first`` and merged afterwards
+    (``scripts/collect_results.py``); each encounter is the same whichever part flies it.
+    """
     out.mkdir(parents=True, exist_ok=True)
-    scenarios = [make_scenario(base, i, seed0, intruders) for i in range(runs)]
+    scenarios = [make_scenario(base, i, seed0, intruders) for i in range(first, first + runs)]
     with ProcessPoolExecutor(max_workers=jobs) as pool:
         results = list(pool.map(_one, [(cfg, s, avoidance) for s in scenarios]))
     cols = [

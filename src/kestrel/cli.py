@@ -121,6 +121,7 @@ def cmd_bench(args: argparse.Namespace) -> int:
         seed0=args.seed0,
         avoidance=not args.no_avoidance,
         intruders=args.intruders,
+        first=args.first,
     )
     print(json.dumps(summary, indent=2))
     return 0
@@ -191,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--jobs", type=int, default=2)
     p.add_argument("--no-avoidance", action="store_true", help="unmitigated baseline for the risk ratio")
     p.add_argument("--intruders", type=int, default=1, help="intruders per encounter")
+    p.add_argument("--first", type=int, default=0, help="index of the first encounter (to split a set)")
     p.add_argument("--out", default="runs/bench")
     common(p)
     p.set_defaults(func=cmd_bench)
