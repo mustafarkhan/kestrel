@@ -52,8 +52,8 @@ from kestrel.types import Setpoint, VehicleState
 from kestrel.vehicle.base import Vehicle
 
 SWEEP_DEG = 40.0  # camera sweep either side of the direction of travel
-YIELD_HORIZON_S = 10.0  # look this far ahead for a conflict with a known contact
-YIELD_MARGIN_M = 10.0  # yield if the predicted closest approach is under min separation + this
+YIELD_HORIZON_S = 6.0  # look this far ahead for a conflict with a known contact
+YIELD_MARGIN_M = 6.0  # yield if the predicted closest approach is under min separation + this
 YIELD_CLEAR_S = 2.0  # conflict must stay clear this long before the path resumes
 YIELD_MAX_S = 60.0  # give up on the task (skip it) if it stays blocked this long
 
@@ -545,7 +545,7 @@ class Executive:
         need = self.cfg.safety.min_separation + YIELD_MARGIN_M
         worst, worst_d = None, math.inf
         for tr in ctx.tracks:
-            if ctx.t - tr.last_hit_t > 5.0:
+            if ctx.t - tr.last_hit_t > 2.0:  # only contacts we are actually seeing
                 continue
             r = ctx.state.pos - tr.pos
             v = planned_vel - tr.vel
