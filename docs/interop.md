@@ -38,8 +38,8 @@ the node answers with a task acknowledgement (accepted, or rejected with a reaso
 the mission has been aborted).
 
 ```python
-look = exporter.look_at(msg)          # (task_id, ENU position) or None
-exporter.task_ack(t, task_id, True)   # TASK_STATUS_ACCEPTED
+look = exporter.look_at(msg)  # (task_id, ENU position) or None
+exporter.task_ack(t, task_id, True)  # TASK_STATUS_ACCEPTED
 ```
 
 The Task and TaskAck message tables (ICD 6.5–6.6) were not in the published text that was

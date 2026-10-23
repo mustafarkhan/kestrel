@@ -65,7 +65,7 @@ kestrel sim "survey the north field at 25 m and follow any drone for 45 seconds"
   --config configs/full.yaml --scenario scenarios/airfield_birds.yaml --sapient runs/sapient.jsonl
 
 # the sensor-node posture over a harbour: stand by, investigate acoustic cues, follow what is confirmed
-kestrel sim "take off to 25 m, stand by at the berth for 5 minutes and investigate any acoustic cues, \
+kestrel sim "take off to 25 m, stand by at the berth for 4 minutes and investigate any acoustic cues, \
 and if you see a drone, follow it from 30 m for 45 seconds, then return home" \
   --config configs/full.yaml --scenario scenarios/port.yaml
 

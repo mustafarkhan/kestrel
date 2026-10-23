@@ -1300,7 +1300,7 @@ def slide_outro() -> list[Image.Image]:
 
 
 NODE_INSTRUCTION = (
-    "take off to 25 m, stand by at the berth for 5 minutes and investigate any acoustic cues, "
+    "take off to 25 m, stand by at the berth for 4 minutes and investigate any acoustic cues, "
     "and if you see a drone, follow it from 30 m for 45 seconds, then return home"
 )
 
