@@ -5,7 +5,7 @@
     {
       "key": "baseline",
       "label": "no avoidance (baseline)",
-      "command": "kestrel bench --no-avoidance --runs 24 --seed0 3000",
+      "command": "kestrel bench --no-avoidance --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": false,
@@ -39,7 +39,7 @@
     {
       "key": "single",
       "label": "one camera",
-      "command": "kestrel bench --runs 24 --seed0 3000",
+      "command": "kestrel bench --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": true,
@@ -76,7 +76,7 @@
     {
       "key": "acoustic",
       "label": "camera + acoustic cueing",
-      "command": "kestrel bench --config configs/acoustic.yaml --runs 24 --seed0 3000",
+      "command": "kestrel bench --config configs/acoustic.yaml --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": true,
@@ -113,7 +113,7 @@
     {
       "key": "ring",
       "label": "five-camera ring",
-      "command": "kestrel bench --config configs/camera_ring.yaml --runs 24 --seed0 3000",
+      "command": "kestrel bench --config configs/camera_ring.yaml --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": true,
@@ -132,6 +132,20 @@
         "drone_tracks": 81,
         "drone_tracks_reported_as_drone": 81,
         "min_bird_separation_m": null,
+        "runs_cued": 0,
+        "runs_confirmed": 0,
+        "cue_to_confirm_s": null,
+        "cue_to_track_s": null,
+        "entry_to_track_s": null,
+        "entry_to_confirm_s": null,
+        "confirm_t_s_median": null,
+        "investigations": 0,
+        "team_min_separation_m": null,
+        "track_error_all_m": null,
+        "investigations_confirmed": 0,
+        "reports_buffered": 0,
+        "jammed_s": null,
+        "observed_while_jammed_s": null,
         "min_separation_m": {
           "min": 11.98,
           "median": 16.865000000000002
@@ -150,7 +164,7 @@
     {
       "key": "birds_off",
       "label": "4 birds, no classifier",
-      "command": "kestrel bench --scenario scenarios/airfield_birds.yaml --runs 24 --seed0 3000",
+      "command": "kestrel bench --scenario scenarios/airfield_birds.yaml --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": true,
@@ -187,7 +201,7 @@
     {
       "key": "birds_on",
       "label": "4 birds + classifier",
-      "command": "kestrel bench --scenario scenarios/airfield_birds.yaml --config configs/birds.yaml --runs 24 --seed0 3000",
+      "command": "kestrel bench --scenario scenarios/airfield_birds.yaml --config configs/birds.yaml --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": true,
@@ -224,7 +238,7 @@
     {
       "key": "two",
       "label": "two intruders",
-      "command": "kestrel bench --intruders 2 --runs 24 --seed0 3000",
+      "command": "kestrel bench --intruders 2 --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": true,
@@ -261,7 +275,7 @@
     {
       "key": "two_baseline",
       "label": "two intruders, no avoidance",
-      "command": "kestrel bench --intruders 2 --no-avoidance --runs 24 --seed0 3000",
+      "command": "kestrel bench --intruders 2 --no-avoidance --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": false,
@@ -295,7 +309,7 @@
     {
       "key": "two_acoustic",
       "label": "two intruders, camera + acoustic",
-      "command": "kestrel bench --intruders 2 --config configs/acoustic.yaml --runs 24 --seed0 3000",
+      "command": "kestrel bench --intruders 2 --config configs/acoustic.yaml --runs 24 --seed0 4000",
       "summary": {
         "seed0": 4000,
         "avoidance": true,
@@ -333,5 +347,10 @@
   "risk_ratio": 0.056,
   "risk_ratio_from": 18,
   "risk_ratio_to": 1,
-  "risk_ratio_two": 0.75
+  "risk_ratio_two": 0.75,
+  "sensor_node": {
+    "seed0": 6000,
+    "runs": 24,
+    "sets": []
+  }
 }

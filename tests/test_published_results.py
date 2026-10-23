@@ -33,6 +33,22 @@ def test_readme_rows_match_the_matrix() -> None:
             assert collect.bird_row(st["label"], st["summary"]) in readme, st["key"]
 
 
+def test_each_set_names_the_seeds_it_was_flown_on() -> None:
+    m = _matrix()
+    groups = [(m["seed0"], m["sets"]), (m["sensor_node"]["seed0"], m["sensor_node"]["sets"])]
+    for seed0, sets in groups:
+        for st in sets:
+            assert f"--seed0 {seed0}" in st["command"], st["key"]
+            assert st["summary"]["seed0"] == seed0, st["key"]
+
+
+def test_sensor_node_rows_match_the_matrix() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    sets = _matrix()["sensor_node"]["sets"]
+    missing = [st["key"] for st in sets if collect.node_row(st["label"], st["summary"]) not in readme]
+    assert not missing, f"README out of date with docs/results/matrix.json: {missing}"
+
+
 def test_risk_ratio_is_stated_as_computed() -> None:
     m = _matrix()
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -40,7 +56,8 @@ def test_risk_ratio_is_stated_as_computed() -> None:
 
 
 def test_summaries_match_per_run_rows() -> None:
-    for st in _matrix()["sets"]:
+    m = _matrix()
+    for st in m["sets"] + m["sensor_node"]["sets"]:
         with open(RESULTS / st["key"] / "results.csv", encoding="utf-8") as fh:
             rows = list(csv.DictReader(fh))
         s = st["summary"]

@@ -1,0 +1,24 @@
+# Camera + acoustic network, with the sensor-node link policy: keep working through a jammed
+# ground link for up to 2 minutes, buffering SAPIENT reports, instead of returning home after
+# 5 s. Otherwise the same as acoustic.yaml.
+vehicle:
+  mass: 1.6
+  battery_wh: 77.0
+camera:
+  width: 480
+  height: 360
+  hfov_deg: 75.0
+  pitch_up_deg: 8.0
+  rate_hz: 10.0
+safety:
+  min_altitude: 5.0
+  max_altitude: 60.0
+  max_horizontal_speed: 8.0
+  fence_margin: 8.0
+  min_separation: 12.0
+  energy_reserve_fraction: 0.2
+  link_loss_action: continue
+  link_loss_autonomy_s: 120.0
+acoustic:
+  enabled: true
+  node_spacing_m: 100.0
