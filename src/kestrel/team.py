@@ -132,8 +132,10 @@ def run_team(
         obs.append(_Observer(k, cfg, sc_k, m_k, avoidance))
     # shared state between executives: who follows what, which reports were investigated
     shared_investigated = obs[0].executive.investigated
+    shared_aircraft = obs[0].executive.handled_aircraft
     for o in obs[1:]:
         o.executive.investigated = shared_investigated
+        o.executive.handled_aircraft = shared_aircraft  # an aircraft one follows, the other leaves
 
     fusion = MultiTargetTracker(cfg.tracker, obs[0].perc.camera)
     acoustic = (
@@ -232,8 +234,9 @@ def run_team(
         live_fixes = [f for f in acoustic_fixes if not _explained(f, tracks, t)]
 
         # ---------------------------------------------------------- decide (each observer)
-        handled = set().union(*(o.executive.handled_contacts for o in obs))
         for o, st in zip(obs, states, strict=True):
+            # contacts a teammate already handles, including one it took up earlier this tick
+            handled = set().union(*(x.executive.handled_contacts for x in obs if x is not o))
             cues = [_cue_estimate(f, st.pos[2], -(k + 1)) for k, f in enumerate(live_fixes)]
             # teammates as cooperative traffic: exact position over the datalink
             coop = []
@@ -307,6 +310,17 @@ def run_team(
             team_sep.append(
                 min(float(np.linalg.norm(a - b)) for i, a in enumerate(flying) for b in flying[i + 1 :])
             )
+        log.link_ok.append(link_ok)
+        log.team_pos.append(np.array([q.pos for q in truth]))
+        log.fused.append(
+            np.array(
+                [
+                    tr.pos
+                    for tr in tracks
+                    if any(float(np.linalg.norm(tr.pos - p)) < 15.0 for _, p, _ in intruders)
+                ]
+            ).reshape(-1, 3)
+        )
         log.on_intruder.append(
             any(
                 declared_drone(tr) and any(float(np.linalg.norm(tr.pos - p)) < 15.0 for _, p, _ in intruders)

@@ -73,6 +73,9 @@ class FlightLog:
     nearest_in_fov: list[bool] = field(default_factory=list)  # nearest intruder inside a camera's view
     nearest_tracked: list[bool] = field(default_factory=list)  # a confirmed track within 15 m of it
     on_intruder: list[bool] = field(default_factory=list)  # a track reported as a drone is on an intruder
+    team_pos: list[Vec] = field(default_factory=list)  # every observer's position (n x 3), team runs
+    fused: list[Vec] = field(default_factory=list)  # positions of tracks on intruders (n x 3), team runs
+    link_ok: list[bool] = field(default_factory=list)
     birds: list[Vec] = field(default_factory=list)  # bird positions (n x 3) per tick, for replay
     cues: list[Vec] = field(default_factory=list)  # live acoustic fixes (n x 2) per tick, for replay
     frames: list[Frame] = field(default_factory=list)
@@ -424,6 +427,7 @@ def run(
             log.nearest_in_fov.append(False)
             log.nearest_tracked.append(False)
         log.bird_dist.append(min((float(np.linalg.norm(b.pos - s.pos)) for b in birds), default=math.inf))
+        log.link_ok.append(link_ok)
         log.on_intruder.append(
             any(
                 declared_drone(tr) and any(float(np.linalg.norm(tr.pos - p)) < 15.0 for _, p, _ in intruders)

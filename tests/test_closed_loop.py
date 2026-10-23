@@ -132,3 +132,20 @@ def test_two_observers_triangulate_and_keep_apart(cfg: Config, airfield: Scenari
     assert m["min_separation_m"] >= cfg.safety.min_separation, m
     # two lines of sight fix range far better than one camera's size-based guess
     assert m["track_error_all_median_m"] < 0.8 * alone["track_error_all_median_m"], (m, alone)
+
+
+def test_two_observers_do_not_both_follow_one_drone(cfg: Config, airfield: Scenario) -> None:
+    from kestrel.team import run_team
+
+    sc = _orbiting_intruder(airfield, max_duration_s=200.0)
+    res = run_team(
+        "take off to 25 m, stand by at the hangar for 90 seconds, and if you see a drone, "
+        "follow it from 30 m for 40 seconds, then return home",
+        cfg,
+        sc,
+        2,
+    )
+    followers = {e.detail.split("]")[0] for e in res.events if e.kind == "interrupt"}
+    targets = [e.detail.rsplit("track ", 1)[1] for e in res.events if e.kind == "interrupt"]
+    assert len(targets) == len(set(targets)), [e.detail for e in res.events if e.kind == "interrupt"]
+    assert followers, "nobody followed the drone"
