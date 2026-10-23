@@ -36,6 +36,11 @@ SETS = [
     ),
     ("two", "two intruders", "kestrel bench --intruders 2"),
     ("two_baseline", "two intruders, no avoidance", "kestrel bench --intruders 2 --no-avoidance"),
+    (
+        "two_acoustic",
+        "two intruders, camera + acoustic",
+        "kestrel bench --intruders 2 --config configs/acoustic.yaml",
+    ),
 ]
 
 

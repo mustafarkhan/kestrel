@@ -68,6 +68,8 @@ class FlightLog:
     n_confirmed: list[int] = field(default_factory=list)
     bird_dist: list[float] = field(default_factory=list)  # to the nearest bird (inf if none)
     intruder_dist: list[float] = field(default_factory=list)  # to the nearest intruder (nan if none)
+    nearest_in_fov: list[bool] = field(default_factory=list)  # nearest intruder inside a camera's view
+    nearest_tracked: list[bool] = field(default_factory=list)  # a confirmed track within 15 m of it
     birds: list[Vec] = field(default_factory=list)  # bird positions (n x 3) per tick, for replay
     cues: list[Vec] = field(default_factory=list)  # live acoustic fixes (n x 2) per tick, for replay
     frames: list[Frame] = field(default_factory=list)
@@ -87,6 +89,8 @@ class FlightLog:
             "n_confirmed": np.array(self.n_confirmed),
             "bird_dist": np.array(self.bird_dist),
             "intruder_dist": np.array(self.intruder_dist),
+            "nearest_in_fov": np.array(self.nearest_in_fov),
+            "nearest_tracked": np.array(self.nearest_tracked),
         }
 
 
@@ -367,6 +371,18 @@ def run(
         log.intruder_dist.append(
             min((float(np.linalg.norm(p - s.pos)) for _, p, _ in intruders), default=math.nan)
         )
+        if intruders:
+            npos = min((p for _, p, _ in intruders), key=lambda p: float(np.linalg.norm(p - s.pos)))
+            log.nearest_in_fov.append(
+                any(
+                    perc.camera.in_view(perc.camera.pose(s.pos, s.quat, tilt, off), npos)
+                    for off in cfg.camera.yaw_offsets_deg
+                )
+            )
+            log.nearest_tracked.append(any(float(np.linalg.norm(tr.pos - npos)) < 15.0 for tr in tracks))
+        else:
+            log.nearest_in_fov.append(False)
+            log.nearest_tracked.append(False)
         log.bird_dist.append(min((float(np.linalg.norm(b.pos - s.pos)) for b in birds), default=math.inf))
         for tr in tracks:
             confirmed_ids.add(tr.ident)

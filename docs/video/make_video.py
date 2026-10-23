@@ -907,7 +907,10 @@ NOTES = [
         "Acoustic cues made the drone give way to aircraft the camera already had",
         "a cue explained by a visual track is dropped; giving way has a time budget",
     ),
-    ("SITL armed and disarmed in a loop", "MAVLink ids taken from the heartbeat; arm() waits for armed"),
+    (
+        "The camera kept staring at where an intruder had been a minute earlier",
+        "watch a stale contact for 15 s, then look where you are going: 3/24 → 1/24 runs inside 12 m",
+    ),
 ]
 
 

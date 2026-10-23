@@ -154,6 +154,8 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | [0009](docs/decisions/0009-birds.md) | no birds in the sky, so false alarms were understated | birds with intermittent flight; wing-beat flicker classifier |
 | [0010](docs/decisions/0010-area-true-rendering.md) | sub-pixel parts drawn too large: drones detectable too far out | area-true drawing; every benchmark re-run |
 | [0011](docs/decisions/0011-cues-identity-and-the-way-home.md) | giving way to cued aircraft already tracked; one drone followed three times; stuck on the way home | cues explained by a track dropped; aircraft identity across tracks; homeward yield cap |
+| [0012](docs/decisions/0012-contact-watch-memory.md) | camera kept staring at where an intruder had been a minute earlier while traffic came head-on | watch a stale contact for 15 s, then look where you are going: 3/24 → 1/24 runs inside 12 m |
+| [0013](docs/decisions/0013-two-intruders.md) | two intruders: one camera loses well clear in 15/24 runs, mostly to the aircraft it is not looking at | measured, explained; acoustic cueing cuts it to 4/24 at the cost of early returns |
 
 ## Testing
 
