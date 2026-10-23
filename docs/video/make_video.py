@@ -1269,9 +1269,12 @@ def slide_next() -> list[Image.Image]:
         ("Not yet", "flown on a real airframe; tested on real air-to-air footage; certified for anything"),
         (
             "Next",
-            "detector evaluation on public real footage (AOT), then flights with a cooperating target drone",
+            "deployment and testing with our systems and defence-technology partners",
         ),
-        ("Wanted", "university labs and UAS teams with a test range, a target drone or real sensor data"),
+        (
+            "With",
+            "real sensor data, multi-sensor network fusion over SAPIENT, field trials against a target drone",
+        ),
     ]
 
     def r(t: float) -> Image.Image:

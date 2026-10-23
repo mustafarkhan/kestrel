@@ -54,14 +54,15 @@ only for what they say about *sensing*.
 
 ## 5. Roadmap, in order
 
-1. Evaluate the detector on real air-to-air footage (public datasets, e.g. AOT [1]).
+1. Deployment and field testing with our systems and defence-technology partners: real sensor data,
+   multi-sensor network fusion over SAPIENT, and flights against a cooperating target drone. Public real
+   air-to-air footage (e.g. AOT [1]) as an independent check on the detector.
 2. Multi-frame, ego-motion-compensated detection, as in AirTrack [2].
 3. A tau-based well-clear definition compared against the current distance-based one [6].
-4. Real flight with a cooperating target drone.
-5. GNSS-integrity monitoring and multi-vehicle tasking.
-6. SAPIENT protobuf encoding from the Dstl `.proto` files and a run against the SAPIENT test harness.
-7. Thermal imagery for night operation; event cameras [4].
-8. A Gazebo/ROS 2 bridge so the same autonomy runs against the photoreal simulators used in industry.
+4. GNSS-integrity monitoring and multi-vehicle tasking.
+5. SAPIENT protobuf encoding from the Dstl `.proto` files and a run against the SAPIENT test harness.
+6. Thermal imagery for night operation; event cameras [4].
+7. A Gazebo/ROS 2 bridge so the same autonomy runs against the photoreal simulators used in industry.
 
 ## Sources
 
