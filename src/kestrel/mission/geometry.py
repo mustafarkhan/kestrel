@@ -23,6 +23,7 @@ from kestrel.mission.schema import (
     OrbitTask,
     ReturnHomeTask,
     SearchTask,
+    StandbyTask,
     SurveyTask,
     TakeoffTask,
     Task,
@@ -106,6 +107,9 @@ def task_geometry(
         return TaskGeometry(task, pts, min(speed, 3.0), task.duration_s, alt)
     if isinstance(task, HoldTask):
         return TaskGeometry(task, np.empty((0, 3)), speed, task.duration_s, alt)
+    if isinstance(task, StandbyTask):
+        xy = resolve_xy(task.at, world)
+        return TaskGeometry(task, np.array([[xy[0], xy[1], alt]]), speed, task.duration_s, alt)
     if isinstance(task, TrackTask):
         return TaskGeometry(task, np.empty((0, 3)), speed, task.duration_s, alt)
     if isinstance(task, ReturnHomeTask):

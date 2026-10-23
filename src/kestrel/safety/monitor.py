@@ -86,7 +86,12 @@ class SafetyMonitor:
             self.last_link_ok_t = st.t
         if not st.armed or st.on_ground:
             return
-        if st.t - self.last_link_ok_t > self.lim.link_loss_timeout_s:
+        limit = (
+            self.lim.link_loss_timeout_s
+            if self.lim.link_loss_action == "rtl"
+            else self.lim.link_loss_autonomy_s
+        )
+        if st.t - self.last_link_ok_t > limit:
             self._latch(SafetyRequest.RTL, f"ground link lost for {st.t - self.last_link_ok_t:.0f} s")
         if self.fence.signed_distance(st.pos) < 0:
             self._latch(SafetyRequest.RTL, "geofence breached")

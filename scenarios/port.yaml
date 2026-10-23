@@ -1,0 +1,25 @@
+# A harbour on the Baltic coast: the observer stands by on the quay to protect berthed ships
+# and an offshore turbine. Below the horizon the camera sees sea, not fields. The origin is
+# a generic Baltic harbour position, used only for the coordinates in SAPIENT reports.
+name: port
+seed: 11
+max_duration_s: 480
+world:
+  fence: [[-150, -150], [150, -150], [150, 150], [-150, 150]]
+  home: [0, -120, 0]
+  origin_lla: [60.1595, 24.9560, 0.0]
+  surface: sea
+  wind: {mean: [4.0, 1.0, 0.0], gust_sigma: 1.5}
+  sites:
+    quay: {kind: rect, min_xy: [-120, -140], max_xy: [120, -100]}
+    berth: {kind: point, xy: [-40, -95]}
+    anchorage: {kind: circle, center: [40, 40], radius: 50}
+    turbine: {kind: point, xy: [90, 100]}
+intruders:
+  - pattern: waypoints
+    center: [40, 40, 30]
+    speed: 5.0
+    waypoints: [[100, 120, 30], [-60, -60, 28], [20, -90, 26], [80, 60, 32]]
+    appear_at_s: 20
+birds:
+  count: 3

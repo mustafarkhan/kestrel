@@ -65,6 +65,15 @@ class HoldTask(_Task):
     duration_s: float = 10.0
 
 
+class StandbyTask(_Task):
+    """Fly to a station and wait there, camera scanning, ready to respond to cues."""
+
+    type: Literal["standby"] = "standby"
+    at: Location
+    altitude: float | None = None
+    duration_s: float = 300.0
+
+
 class TrackTask(_Task):
     type: Literal["track"] = "track"
     standoff_m: float = 30.0
@@ -86,6 +95,7 @@ Task = Annotated[
     | SurveyTask
     | SearchTask
     | HoldTask
+    | StandbyTask
     | TrackTask
     | ReturnHomeTask
     | LandTask,
@@ -102,6 +112,12 @@ class Mission(BaseModel):
     )
     contact_standoff_m: float = 30.0
     contact_track_s: float = 60.0
+    on_cue: Literal["ignore", "investigate"] = Field(
+        "ignore",
+        description="what to do when a ground sensor (e.g. microphones) reports an aircraft "
+        "the camera has not seen",
+    )
+    investigate_timeout_s: float = 60.0
     max_speed: float | None = None
 
     def describe(self) -> str:
@@ -110,4 +126,7 @@ class Mission(BaseModel):
             fields = {k: v for k, v in t.model_dump().items() if k != "type" and v is not None}
             args = ", ".join(f"{k}={v}" for k, v in fields.items())
             parts.append(f"{t.type}({args})")
-        return " -> ".join(parts) + f"  [on_contact={self.on_contact}]"
+        tail = f"  [on_contact={self.on_contact}" + (
+            f", on_cue={self.on_cue}]" if self.on_cue != "ignore" else "]"
+        )
+        return " -> ".join(parts) + tail

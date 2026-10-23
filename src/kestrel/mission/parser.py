@@ -24,6 +24,7 @@ from kestrel.mission.schema import (
     OrbitTask,
     ReturnHomeTask,
     SearchTask,
+    StandbyTask,
     SurveyTask,
     TakeoffTask,
     Task,
@@ -59,7 +60,8 @@ _NUM = r"(\d+(?:\.\d+)?)"
 _SPLIT = re.compile(r"\s*(?:,?\s*\bthen\b|,?\s*\bafter that\b|;|\.\s+|\band finally\b)\s*", re.I)
 _VERBS = (
     r"take ?off|launch|fly|go|head|move|proceed|transit|orbit|circle|loiter|survey|sweep|scan|"
-    r"patrol|search|look for|track|follow|shadow|hold|hover|wait|return|come back|land|rtl"
+    r"patrol|search|look for|track|follow|shadow|hold|hover|wait|return|come back|land|rtl|"
+    r"stand ?by|keep watch"
 )
 _SUBSPLIT = re.compile(rf"\s*(?:,\s*(?:and\s+)?|\s+and\s+)(?=(?:{_VERBS})\b)", re.I)
 _CONTACT = re.compile(
@@ -67,6 +69,12 @@ _CONTACT = re.compile(
     r"(?:drone|uav|uas|aircraft|intruder|target|contact)s?\b[^,.;]*?,?\s*"
     r"(?P<verb>track|follow|shadow|watch|observe|report|ignore)(?: it| them)?"
     r"(?P<rest>[^.;]*)",
+    re.I,
+)
+_CUE = re.compile(
+    r"(?:,?\s*and\s+)?\b(?:investigate|check|confirm|look at)\s+(?:any|all|every|each)?\s*"
+    r"(?:acoustic\s+|ground\s+|sensor\s+)?(?:cues?|alerts?|alarms?|sounds?|reports?)\b"
+    r"(?:\s+(?:from|by) the (?:ground|microphones?|sensors?))?",
     re.I,
 )
 _COORD = re.compile(r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)")
@@ -150,6 +158,8 @@ class RuleParser:
                 radius=_num(rf"radius (?:of )?{_NUM}", c) or 15.0,
                 duration_s=_duration(c) or 60.0,
             )
+        if re.search(r"\b(stand ?by|keep watch|on station)\b", low):
+            return StandbyTask(at=self._need_location(c), altitude=alt, duration_s=_duration(c) or 300.0)
         if re.search(r"\b(track|follow|shadow|observe|watch)\b", low):
             return TrackTask(
                 standoff_m=_num(rf"\bfrom {_NUM}\s*m\b", c) or 30.0, duration_s=_duration(c) or 60.0
@@ -161,6 +171,11 @@ class RuleParser:
         raise ParseError(f"could not understand '{c.strip()}'")
 
     def parse(self, text: str) -> Mission:
+        on_cue = "ignore"
+        mc = _CUE.search(text)
+        if mc:
+            on_cue = "investigate"
+            text = text[: mc.start()] + " then " + text[mc.end() :]
         on_contact = "report"
         standoff = 30.0
         track_s = 60.0
@@ -177,5 +192,19 @@ class RuleParser:
         if not tasks:
             raise ParseError("no tasks found")
         return Mission(
-            tasks=tasks, on_contact=on_contact, contact_standoff_m=standoff, contact_track_s=track_s
+            tasks=tasks,
+            on_contact=on_contact,
+            contact_standoff_m=standoff,
+            contact_track_s=track_s,
+            on_cue=on_cue,
         )
+
+
+_INVESTIGATE = re.compile(r"^\s*(?:investigate|check|confirm|look at)\b", re.I)
+
+
+def parse_investigate(text: str, parser: RuleParser) -> Location | None:
+    """An operator tasking during flight: "investigate (40, 90)" or "check the tower"."""
+    if not _INVESTIGATE.search(text):
+        return None
+    return parser._location(text)

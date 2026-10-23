@@ -24,6 +24,7 @@ from kestrel.mission.schema import (
     OrbitTask,
     ReturnHomeTask,
     SearchTask,
+    StandbyTask,
     SurveyTask,
     TakeoffTask,
     TrackTask,
@@ -120,7 +121,7 @@ def validate(mission: Mission, cfg: Config, world: WorldConfig) -> ValidationRep
             rep.errors.append(f"{label}: orbit radius must be at least 5 m")
         if isinstance(task, SurveyTask) and task.spacing < 5.0:
             rep.errors.append(f"{label}: survey spacing must be at least 5 m")
-        if isinstance(task, HoldTask | SearchTask | TrackTask) and g.dwell_s > 1800:
+        if isinstance(task, HoldTask | SearchTask | TrackTask | StandbyTask) and g.dwell_s > 1800:
             rep.errors.append(f"{label}: duration over 30 min")
         if len(g.points):
             full = np.vstack([pos[None, :], g.points])
@@ -144,6 +145,10 @@ def validate(mission: Mission, cfg: Config, world: WorldConfig) -> ValidationRep
         # budget for one contact interruption
         wh += energy.hover_wh(mission.contact_track_s) * 1.2
         duration += mission.contact_track_s
+    if mission.on_cue == "investigate":
+        # budget for one investigation: out and back across the area plus the search time
+        wh += energy.hover_wh(mission.investigate_timeout_s + 60.0) * 1.2
+        duration += mission.investigate_timeout_s + 60.0
     landing = max(pos[2], 0.0) / lim.land_speed
     wh += energy.hover_wh(landing)
     duration += landing

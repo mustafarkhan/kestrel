@@ -16,7 +16,8 @@ from typing import Any
 
 import numpy as np
 
-from kestrel.config import Config, IntruderConfig, Scenario, WindParams
+from kestrel.config import Config, IntruderConfig, LinkLossEvent, Scenario, WindParams
+from kestrel.interop.sapient import SapientExporter, SapientOptions
 from kestrel.metrics import compute_metrics
 from kestrel.runtime import run
 
@@ -24,6 +25,13 @@ BENCH_MISSION = (
     "take off to 25 m, survey the north field at 25 m with 30 m spacing, "
     "and if you see a drone, follow it from 30 m for 45 seconds, then return home"
 )
+# The sensor-node posture: wait on station near the protected site, go and look when the
+# ground sensors hear something, report it, follow it for a while, come back.
+STANDBY_MISSION = (
+    "take off to 25 m, stand by at the hangar for 4 minutes and investigate any acoustic cues, "
+    "and if you see a drone, follow it from 30 m for 45 seconds, then return home"
+)
+MISSIONS = {"survey": BENCH_MISSION, "standby": STANDBY_MISSION}
 
 
 def _intruder(rng: np.random.Generator) -> IntruderConfig:
@@ -44,7 +52,9 @@ def _intruder(rng: np.random.Generator) -> IntruderConfig:
     )
 
 
-def make_scenario(base: Scenario, i: int, seed0: int = 1000, intruders: int = 1) -> Scenario:
+def make_scenario(
+    base: Scenario, i: int, seed0: int = 1000, intruders: int = 1, jam_s: float = 0.0
+) -> Scenario:
     """Encounter ``i`` of a benchmark set.
 
     The first intruder and the wind are drawn exactly as in single-intruder sets, so adding
@@ -63,19 +73,30 @@ def make_scenario(base: Scenario, i: int, seed0: int = 1000, intruders: int = 1)
     )
     extra_rng = np.random.default_rng(seed0 + i + 50_000)
     extra = [_intruder(extra_rng) for _ in range(intruders - 1)]
-    return base.model_copy(
-        update={
-            "name": f"{base.name}-mc{i:03d}",
-            "seed": seed0 + i,
-            "world": world,
-            "intruders": [first, *extra],
-        }
-    )
+    update: dict[str, Any] = {
+        "name": f"{base.name}-mc{i:03d}",
+        "seed": seed0 + i,
+        "world": world,
+        "intruders": [first, *extra],
+    }
+    if jam_s > 0.0:  # one jamming window, timed around the intruder's arrival
+        jam_rng = np.random.default_rng(seed0 + i + 70_000)
+        start = max(20.0, first.appear_at_s + float(jam_rng.uniform(-20.0, 10.0)))
+        update["link_loss"] = [LinkLossEvent(start_s=start, duration_s=jam_s)]
+    return base.model_copy(update=update)
 
 
-def _one(args: tuple[Config, Scenario, bool]) -> dict[str, Any]:
-    cfg, sc, avoidance = args
-    res = run(BENCH_MISSION, cfg, sc, avoidance=avoidance)
+def _one(args: tuple[Config, Scenario, bool, str, int]) -> dict[str, Any]:
+    cfg, sc, avoidance, mission, observers = args
+    # Every run also writes SAPIENT reports (kept in memory): they cost little, and with a
+    # jammed link the number held back and sent late is one of the results.
+    sapient = SapientExporter(SapientOptions(origin_lla=sc.world.origin_lla, seed=sc.seed))
+    if observers > 1:
+        from kestrel.team import run_team
+
+        res = run_team(MISSIONS[mission], cfg, sc, observers, avoidance=avoidance, sapient=sapient)
+    else:
+        res = run(MISSIONS[mission], cfg, sc, avoidance=avoidance, sapient=sapient)
     m = compute_metrics(res)
     m["avoidance"] = avoidance
     m["intruder"] = sc.intruders[0].pattern
@@ -93,6 +114,9 @@ def run_benchmark(
     avoidance: bool = True,
     intruders: int = 1,
     first: int = 0,
+    mission: str = "survey",
+    jam_s: float = 0.0,
+    observers: int = 1,
 ) -> dict[str, Any]:
     """Fly encounters ``first .. first + runs - 1`` of the set starting at ``seed0``.
 
@@ -100,16 +124,20 @@ def run_benchmark(
     (``scripts/collect_results.py``); each encounter is the same whichever part flies it.
     """
     out.mkdir(parents=True, exist_ok=True)
-    scenarios = [make_scenario(base, i, seed0, intruders) for i in range(first, first + runs)]
+    scenarios = [make_scenario(base, i, seed0, intruders, jam_s) for i in range(first, first + runs)]
     with ProcessPoolExecutor(max_workers=jobs) as pool:
-        results = list(pool.map(_one, [(cfg, s, avoidance) for s in scenarios]))
+        results = list(pool.map(_one, [(cfg, s, avoidance, mission, observers) for s in scenarios]))
     cols = [
         "scenario", "intruder", "intruder_speed", "completed", "landed", "duration_s", "energy_wh",
         "est_energy_wh", "min_separation_m", "time_below_min_separation_s", "time_to_first_track_s",
         "tracking_time_s", "track_error_median_m", "track_error_p90_m", "target_in_fov_fraction",
         "yields", "returned_for_traffic", "encounter", "encounter_detected", "lowc_events",
         "false_alarms", "flight_hours", "bird_tracks", "birds_declared_drone", "drones_matched",
-        "drones_declared", "min_bird_separation_m",
+        "drones_declared", "min_bird_separation_m", "cue_t_s", "confirm_t_s", "cue_to_confirm_s",
+        "cue_to_track_s", "entry_to_track_s", "entry_to_confirm_s", "observers", "team_min_separation_m",
+        "track_error_all_median_m",
+        "track_error_all_p90_m", "jammed_s", "observed_while_jammed_s",
+        "investigations", "investigations_confirmed", "reports_buffered",
         "range_mean_m", "false_tracks", "final_distance_from_home_m",
     ]  # fmt: skip
     with open(out / "results.csv", "w", newline="", encoding="utf-8") as fh:
@@ -155,6 +183,51 @@ def summarise(rs: list[dict[str, Any]]) -> dict[str, Any]:
         "drone_tracks_reported_as_drone": int(sum(r.get("drones_declared", 0) for r in rs)),
         "min_bird_separation_m": float(_vals(rs, "min_bird_separation_m").min())
         if len(_vals(rs, "min_bird_separation_m"))
+        else None,
+        "runs_cued": sum(1 for r in rs if r.get("cue_t_s") is not None),
+        "runs_confirmed": sum(1 for r in rs if r.get("confirm_t_s") is not None),
+        "cue_to_confirm_s": {
+            "median": float(np.median(_vals(rs, "cue_to_confirm_s"))),
+            "p90": float(np.percentile(_vals(rs, "cue_to_confirm_s"), 90)),
+        }
+        if len(_vals(rs, "cue_to_confirm_s"))
+        else None,
+        "cue_to_track_s": {
+            "median": float(np.median(_vals(rs, "cue_to_track_s"))),
+            "p90": float(np.percentile(_vals(rs, "cue_to_track_s"), 90)),
+        }
+        if len(_vals(rs, "cue_to_track_s"))
+        else None,
+        "entry_to_track_s": {
+            "median": float(np.median(_vals(rs, "entry_to_track_s"))),
+            "p90": float(np.percentile(_vals(rs, "entry_to_track_s"), 90)),
+        }
+        if len(_vals(rs, "entry_to_track_s"))
+        else None,
+        "entry_to_confirm_s": {
+            "median": float(np.median(_vals(rs, "entry_to_confirm_s"))),
+            "p90": float(np.percentile(_vals(rs, "entry_to_confirm_s"), 90)),
+        }
+        if len(_vals(rs, "entry_to_confirm_s"))
+        else None,
+        "confirm_t_s_median": float(np.median(_vals(rs, "confirm_t_s")))
+        if len(_vals(rs, "confirm_t_s"))
+        else None,
+        "investigations": int(sum(r.get("investigations", 0) for r in rs)),
+        "team_min_separation_m": float(_vals(rs, "team_min_separation_m").min())
+        if len(_vals(rs, "team_min_separation_m"))
+        else None,
+        "track_error_all_m": {
+            "median": float(np.median(_vals(rs, "track_error_all_median_m"))),
+            "p90": float(np.median(_vals(rs, "track_error_all_p90_m"))),
+        }
+        if len(_vals(rs, "track_error_all_median_m"))
+        else None,
+        "investigations_confirmed": int(sum(r.get("investigations_confirmed", 0) for r in rs)),
+        "reports_buffered": int(sum(r.get("reports_buffered", 0) for r in rs)),
+        "jammed_s": float(_vals(rs, "jammed_s").sum()) if len(_vals(rs, "jammed_s")) else None,
+        "observed_while_jammed_s": float(_vals(rs, "observed_while_jammed_s").sum())
+        if len(_vals(rs, "observed_while_jammed_s"))
         else None,
         "min_separation_m": {"min": float(sep.min()), "median": float(np.median(sep))} if len(sep) else None,
         "time_to_first_track_s_median": float(np.median(_vals(rs, "time_to_first_track_s")))
