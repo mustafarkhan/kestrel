@@ -20,9 +20,11 @@ it never touches the controls. Every setpoint passes an independent safety monit
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
-🎬 **[Project video (3 min 20 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
+🎬 **[Project video (6 min 20 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
 rejected unsafe plan, a closed-loop flight with birds and acoustic cueing, bird-versus-drone on real rendered pixels,
-SAPIENT output, the same code flying ArduCopter SITL, and the measured results against a no-avoidance baseline.
+SAPIENT output, the same code flying ArduCopter SITL, the measured results against a no-avoidance baseline, then the
+sensor-node role: standing by over a harbour, investigating acoustic cues and a C2 tasking, working through a jammed
+link, two observers triangulating one drone, the measured sensor-node results and the parts cost.
 Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
 
 | | how | measured |

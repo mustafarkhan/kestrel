@@ -498,7 +498,11 @@ def _node_caption(res: RunResult, k: int, t: float) -> str:
             return (
                 "C2 tasking over SAPIENT (LOOK_AT), acknowledged: go and look, camera tilted up at the column"
             )
-        return f"Investigating a {src}: no altitude from sound, so close in low and look up at the column"
+        if src.startswith("acoustic"):
+            return (
+                f"Investigating an {src}: no altitude from sound, so close in low and look up at the column"
+            )
+        return f"Investigating: {src}"
     if last is not None and last.kind == "tasking" and t - last.t < 4.0:
         return "Tasking received from the command node"
     if beh == "standby":
@@ -744,9 +748,9 @@ def team_frames(res: RunResult, number: str = "11") -> Iterator[Image.Image]:
         ]
         for i, line in enumerate(lines):
             d.text((x0, 80 + 32 * i), line, fill=INK2, font=sans(21))
-        gx, gy, gw, gh = x0, 270, 520, 200
+        gx, gy, gw, gh = x0, 290, 520, 180
+        d.text((gx, gy - 24), "fused position error [m], this flight", fill=MUTED, font=sans(16))
         d.rectangle([gx, gy, gx + gw, gy + gh], fill=PANEL)
-        d.text((gx + 10, gy + 8), "fused position error [m], this flight", fill=MUTED, font=sans(16))
         pts = [(gx + gw * tt / t_end, gy + gh - gh * min(e, 10.0) / 10.0) for tt, e in errs]
         if len(pts) > 1:
             d.line(pts, fill=AQUA, width=2)
@@ -785,8 +789,8 @@ def slide_node_results(matrix: dict[str, Any]) -> list[Image.Image]:
             fill=MUTED,
             font=sans(19),
         )
-        cols = [("configuration", 70), ("report → track", 470), ("entry → track", 640), ("position error", 800),
-                ("inside 12 m", 970), ("held while jammed", 1100)]  # fmt: skip
+        cols = [("configuration", 70), ("report → track", 400), ("entry → track", 530), ("position error", 660),
+                ("inside 12 m", 800), ("completed", 920), ("held while jammed", 1050)]  # fmt: skip
         y = 140
         for name, x in cols:
             d.text((x, y), name, fill=MUTED, font=sans(17))
@@ -802,6 +806,7 @@ def slide_node_results(matrix: dict[str, Any]) -> list[Image.Image]:
                 mp(sm.get("entry_to_track_s")),
                 "n/a" if err is None else f"{err['median']:.1f} m",
                 f"{sm['separation_violations']}/{sm['runs']}",
+                f"{sm['completed_and_landed']}/{sm['runs']}",
                 "n/a" if jam is None else f"{jam:.0f} of {sm['jammed_s']:.0f} s",
             ]
             d.line([(70, y - 6), (W - 60, y - 6)], fill=LINE, width=1)
@@ -809,6 +814,14 @@ def slide_node_results(matrix: dict[str, Any]) -> list[Image.Image]:
             for (_, x), v in zip(cols[1:], vals, strict=True):
                 d.text((x, y), v, fill=INK, font=mono(19))
             y += 40
+        if t >= 0.35 * len(sets):
+            for i, line in enumerate(
+                [
+                    "On a jammed link, returning home gives up every mission. Keeping working holds the",
+                    "picture through most of the jamming, at the cost of two runs coming inside 12 m.",
+                ]
+            ):
+                d.text((70, y + 24 + 30 * i), line, fill=INK2, font=sans(20))
         footer(
             d,
             "medians over the runs; every number in docs/results/matrix.json, reproducible with kestrel bench",
