@@ -44,6 +44,16 @@ bird must not lose protection. The classifier changes what is *reported* and
 *followed*, never what is *avoided*. Acoustic cues the camera cannot yet confirm are
 kept clear of as vertical columns, because sound gives no altitude.
 
+**A lost link is bounded.** By default the observer returns home 5 s after the ground link
+is lost. The sensor-node policy (`link_loss_action: continue`) keeps the task going on
+board for at most `link_loss_autonomy_s` (2 minutes), then returns home on its own; every
+on-board limit (separation, geofence, altitude, energy) applies throughout. Commands and
+ground-sensor cues do not arrive while the link is down.
+
+**Teammates are traffic.** With several observers, each keeps the others' datalink
+positions clear like any aircraft, and the safety monitor keeps clear of every fused
+track, including ones labelled friendly, because a label can be wrong.
+
 **Giving way is bounded; separation is not.** The executive gives way to traffic
 crossing its planned path, for at most two minutes per mission and 30 s on the way
 home, so persistent traffic cannot hold the aircraft out until the battery decides.

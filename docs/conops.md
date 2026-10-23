@@ -81,7 +81,38 @@ coverage are below.
 
 ## Cost and coverage
 
-COST_SECTION
+**Parts for one node** (retail listings and launch announcements, October 2026; a parts
+cost, not a product price: no engineering, certification, ground station or support):
+
+| item | example | price |
+|---|---|---|
+| airframe, autopilot, GPS, telemetry, motors, ESCs | Holybro X500 V2 PX4 development kit (Pixhawk 6C or 6X) [1] | £645–785 incl. VAT |
+| companion computer | NVIDIA Jetson Orin Nano Super developer kit, 67 TOPS [2] | $249 (launch price) |
+| camera | Raspberry Pi High Quality Camera, 12.3 MP [3] | $50 |
+| battery, lens, gimbal, mounts | estimate, not sourced | about €300 |
+| **total** | | **about €1,350–1,500** |
+
+A ground acoustic node of the kind fielded in Ukraine costs about $400–500 [4]; the
+nine-node grid in the benchmark would be about $4,000.
+
+**For scale.** The European Council on Foreign Relations puts a Geran-type drone at
+about €10,000, and missiles fired at such drones at several hundred thousand to a
+million euros each [5]. A sensor node replaces no interceptor. What it changes is the
+question asked before one is used: *is that a drone, and where exactly is it?*
+
+**Coverage from one station.** In the benchmark (see the README), a node standing by at
+the hangar with the microphone grid tracked every cued intruder across the
+300 m × 300 m area, a median 23 s after the first report and within 26 s in 90% of runs,
+launch included; without the microphones it tracked 17 of 24, with a 90th percentile
+of 145 s after the intruder crossed the fence. Coverage scales with the cueing layer,
+not with more cameras.
+
+Sources:
+1. Flying Tech, *Holybro X500 V2 Quadcopter PX4 Development Kit*. https://www.flyingtech.co.uk/product/holybro-x500-v2-quadcopter-px4-development-kit/
+2. Phoronix, *NVIDIA Launches $249 "Gen AI Supercomputer" With Jetson Orin Nano Super Developer Kit*. https://www.phoronix.com/news/NVIDIA-Jetson-Orin-Nano-Super
+3. Digital Camera World, *Raspberry Pi launches 12.3MP camera module for just $50*. https://www.digitalcameraworld.com/uk/news/raspberry-pi-launches-123mp-camera-module-for-just-dollar50
+4. US Army Center for Army Lessons Learned, *Listening to the sky* (2026), see docs/research.md [8].
+5. ECFR, *Buzzkill: how to defend Europe against drones* (2026). https://ecfr.eu/publication/buzzkill-how-to-defend-europe-against-drones/
 
 ## Not done
 

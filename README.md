@@ -1,15 +1,22 @@
-# Kestrel: a language-tasked aerial observer
+# Kestrel: an airborne sensor node you task in plain English
 
 [![CI](https://github.com/mustafarkhan/kestrel/actions/workflows/ci.yml/badge.svg)](https://github.com/mustafarkhan/kestrel/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 ![Python 3.11-3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)
 
-Tell a small drone, in plain English, to *"survey the north field at 25 m and if you see a drone, follow it from
-30 m for 60 seconds, then come home"*. Kestrel turns that into a validated flight plan and flies it. It finds other
-aircraft **in camera pixels**, tells drones from birds, takes cues from a ground microphone network, keeps clear,
-shadows the intruder at a safe standoff, reports everything in **SAPIENT**, the message standard NATO uses for
-counter-drone sensors, then resumes the survey and lands. A language model writes the plan; it never touches the
-controls. Every setpoint passes an independent safety monitor that no planner, learned or not, can get past.
+**Kestrel is an airborne sensor node for layered counter-drone defence and detect-and-avoid: it finds, tracks,
+identifies and reports. It never engages.** It goes where fixed sensors are blind (low altitude, behind terrain,
+temporary sites), confirms what ground sensors only half-see, and puts it into the shared air picture in
+**SAPIENT**, the message standard NATO uses for counter-drone sensors. The role and its limits:
+[docs/conops.md](docs/conops.md).
+
+You task it in plain English: *"stand by at the berth for 30 minutes and investigate any acoustic cues, and if you
+see a drone, follow it from 30 m"*. It turns that into a validated flight plan and flies it. When ground
+microphones hear something, or the command node sends a SAPIENT `LOOK_AT` task, it goes and looks, finds the
+aircraft **in camera pixels**, tells drones from birds, keeps clear, follows at a standoff, and reports. Two
+observers fuse their cameras into one track and get range by triangulation. A jammed link does not stop it: it keeps
+working on board for a bounded time and sends its reports when the link returns. A language model writes the plan;
+it never touches the controls. Every setpoint passes an independent safety monitor.
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
@@ -27,14 +34,18 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 | **Hear what the camera cannot see** | ground microphone grid, 2° bearings, triangulated fixes that point the camera and widen the keep-out | see the results matrix |
 | **Track** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.6 m median position error while shadowing at ~30 m |
 | **Keep clear** | give way to crossing traffic, standoff guidance, escape velocity; separation buffer from uncertainty, reachable set and stopping distance | risk ratio against no avoidance, below |
-| **Report** | SAPIENT ICD v7 registration, status and detection reports, UTM coordinates ([interop.md](docs/interop.md)) | mandatory fields and coordinates tested; no conformance run yet |
+| **Report and take tasking** | SAPIENT ICD v7 registration, status and detection reports, UTM coordinates; accepts and acknowledges `LOOK_AT` tasks ([interop.md](docs/interop.md)) | mandatory fields, coordinates and task round trip tested; no conformance run yet |
+| **Investigate reports** | stand by on station; go and look when a ground sensor, an operator or the C2 node reports something; confirm, classify, follow | report to track: see the sensor-node table |
+| **Work through jamming** | bounded on-board autonomy when the ground link is lost; reports held and sent with their original times | intruder held while jammed: see the sensor-node table |
+| **Fly as a team** | two observers, one fused tracker, shared contacts, each other as cooperative traffic | intruder position error with two observers against one: see the sensor-node table |
 | **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink) | full mission flown on **ArduCopter 4.6.3 SITL in CI** |
 
-> **Status (October 2026, v0.2).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
+> **Status (October 2026, v0.3).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
 > a real airframe**, has not been evaluated on real air-to-air footage, and nothing is flight-qualified. The camera,
 > bird and aircraft models are simplified. The known gaps are under [Limitations](#limitations), in
 > [docs/safety.md](docs/safety.md) and, against published standards, in [docs/research.md](docs/research.md).
-> Kestrel is an observer: it detects, tracks, keeps clear and reports. It has no intercept or engagement function.
+> Kestrel is a sensor: it detects, tracks, keeps clear and reports. It has no intercept, engagement or targeting
+> function, and its reports describe airspace for its protection.
 
 ## Quick start
 
@@ -52,6 +63,14 @@ follow it from 30 m for 60 seconds, then return home" --gif --out runs/demo
 # everything on: birds in the sky, microphones, the bird/drone classifier, SAPIENT reports
 kestrel sim "survey the north field at 25 m and follow any drone for 45 seconds" \
   --config configs/full.yaml --scenario scenarios/airfield_birds.yaml --sapient runs/sapient.jsonl
+
+# the sensor-node posture over a harbour: stand by, investigate acoustic cues, follow what is confirmed
+kestrel sim "take off to 25 m, stand by at the berth for 5 minutes and investigate any acoustic cues, \
+and if you see a drone, follow it from 30 m for 45 seconds, then return home" \
+  --config configs/full.yaml --scenario scenarios/port.yaml
+
+# operator commands are injected by time: send it to look at a point at t = 90 s, abort at t = 200 s
+kestrel sim "take off to 25 m and stand by at the hangar for 4 minutes" --command "90:investigate (40, 90)" --command "200:abort"
 
 # operator emergencies are injected by time: abort at t = 60 s
 kestrel sim "survey the north field at 25 m" --command "60:abort"
@@ -110,13 +129,32 @@ as a drone that never corresponds to one.
 | two intruders | 15/24 (26) | 1.0 m | 11/24 | 5.6 | 22/24 (2) |
 | two intruders, no avoidance | 20/24 (30) | 1.3 m | 16/24 | 2.1 | 24/24 (0) |
 | two intruders, camera + acoustic | 4/24 (5) | 3.7 m | 15/24 | 2.3 | 12/24 (12) |
+| two intruders, two observers | 18/24 (32) | 1.3 m | 21/24 | 5.6 | 24/24 (0) |
 
 | birds in the area | bird tracks | bird tracks reported as a drone | drone tracks reported as a drone |
 |---|---|---|---|
 | 4 birds, no classifier | 27 | 27 | 85/85 |
 | 4 birds + classifier | 26 | 8 | 84/96 |
 
-With one intruder, avoidance with one camera has a **risk ratio of 0.06**: 1 of 24 runs lost well clear, against 18 of 24 flying the same encounters without avoidance. Each added layer is measured on the same encounters. With two intruders the ratio is 0.75 (15 against 20 of 24), because one forward camera cannot watch two aircraft; the acoustic network brings it to 4 of 24, at the cost of 12 missions ending early for traffic ([0013](docs/decisions/0013-two-intruders.md)). With birds in the area, the classifier cuts false alarms from 16.8 to 4.8 per flight hour. 8 of 26 bird tracks were still reported as drones (a gliding bird shows no wing-beat; [0009](docs/decisions/0009-birds.md)). 12 of 96 drone tracks were never reported as drones, being too faint or brief to classify; the safety monitor kept clear of them all the same.
+With one intruder, avoidance with one camera has a **risk ratio of 0.06**: 1 of 24 runs lost well clear, against 18 of 24 flying the same encounters without avoidance. Each added layer is measured on the same encounters. With two intruders the ratio is 0.75 (15 against 20 of 24), because one forward camera cannot watch two aircraft; the acoustic network brings it to 4 of 24, at the cost of 12 missions ending early for traffic ([0013](docs/decisions/0013-two-intruders.md)). Two observers against two intruders made it worse, not better: 18 of 24 runs had an observer inside 12 m (32 entries, about 16 per observer against 26 for one). A second aircraft in the same airspace is a second aircraft to keep apart, and cross-cueing, which turns the second camera to the drone the first is following, probably also turns it away from the other drone; that has not yet been traced run by run, and it is the next thing to fix. With birds in the area, the classifier cuts false alarms from 16.8 to 4.8 per flight hour. 8 of 26 bird tracks were still reported as drones (a gliding bird shows no wing-beat; [0009](docs/decisions/0009-birds.md)). 12 of 96 drone tracks were never reported as drones, being too faint or brief to classify; the safety monitor kept clear of them all the same.
+
+### The sensor node
+
+The standby mission: wait on station near the hangar, investigate reports, follow a confirmed drone for 45 s, return
+after 4 minutes. 24 further encounters (seeds 6000-6023, never used while developing), same intruder generator.
+"Report to track" runs from the first ground-sensor report reaching the observer (while it is still on the ground,
+so launch is included) to the first camera track on the intruder; "geofence entry to track" from the intruder
+crossing the fence. Position error is over every moment an intruder was tracked, not only while following.
+
+| sensor node | report to track (median / p90) | geofence entry to track (median / p90) | runs with a drone confirmed | intruder position error (median) | runs inside 12 m | missions completed | intruder held while jammed | reports sent late |
+|---|---|---|---|---|---|---|---|---|
+| camera only | n/a | 49 s / 145 s | 17/24 | 4.9 m | 3/24 | 24/24 | n/a | 0 |
+| camera + acoustic cueing | 23 s / 26 s | 20 s / 26 s | 24/24 | 4.8 m | 1/24 | 24/24 | n/a | 0 |
+| two observers + acoustic | 24 s / 39 s | 20 s / 39 s | 23/24 | 1.4 m | 3/24 | 24/24 | n/a | 0 |
+| link jammed 60 s, return home | 22 s / 26 s | 20 s / 24 s | 22/24 | 5.1 m | 0/24 | 0/24 | 267 of 1254 s | 194 |
+| link jammed 60 s, keep working | 23 s / 26 s | 20 s / 26 s | 24/24 | 4.4 m | 2/24 | 24/24 | 1304 of 1440 s | 4124 |
+
+Ground sensors are what make the node fast. With the camera alone, waiting on station, a drone was tracked in 17 of 24 runs, a median 49 s after it crossed the fence (90th percentile 145 s). With microphones cueing it, in 24 of 24, 20 s after entry (90th percentile 26 s) and 23 s after the first report, launch included. A second observer cut the intruder position error from 4.8 m to 1.4 m (median), because two lines of sight fix range where one camera has to guess it from the drone's assumed size; the cost is a second aircraft that can come close to the intruder (3 runs inside 12 m against 1). Under a 60 s jam, the civil policy (return home after 5 s of link loss) ended every mission and held the intruder for 267 of the 1254 jammed seconds it was still airborne; keeping working held it for 1304 of 1440 s, completed 24 of 24 missions and sent 4124 reports late with their original timestamps, at the cost of 2 runs inside 12 m against 0.
 
 Reproduce any row with the command in [docs/results/matrix.json](docs/results/matrix.json); per-run rows are in
 `docs/results/<set>/results.csv`. A test fails CI if these tables and the committed results disagree.
@@ -169,6 +207,7 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | [0011](docs/decisions/0011-cues-identity-and-the-way-home.md) | giving way to cued aircraft already tracked; one drone followed three times; stuck on the way home | cues explained by a track dropped; aircraft identity across tracks; homeward yield cap |
 | [0012](docs/decisions/0012-contact-watch-memory.md) | camera kept staring at where an intruder had been a minute earlier while traffic came head-on | watch a stale contact for 15 s, then look where you are going: 3/24 → 1/24 runs inside 12 m |
 | [0013](docs/decisions/0013-two-intruders.md) | two intruders: one camera loses well clear in 15/24 runs, mostly to the aircraft it is not looking at | measured, explained; acoustic cueing cuts it to 4/24 at the cost of early returns |
+| [0014](docs/decisions/0014-sensor-node.md) | investigating from a climbing altitude put targets below the horizon; standby never ended under repeated cues; teammates tracked as intruders; two observers following one drone | hold mission altitude; standby time includes excursions; friendly by bearing, safety on all tracks; contacts claimed within the tick |
 
 ## Testing
 
@@ -189,6 +228,10 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 
 - **Simulation, not flight.** No real airframe, no real footage. The first roadmap item is evaluating the detector
   on public real air-to-air data; after that, flights with a cooperating target drone.
+- **Two observers** share a perfect datalink in simulation; its loss, latency and bandwidth are not modelled. A
+  second observer doubles the number of aircraft that can come close to an intruder, and the table shows it.
+- **Jammed-link autonomy** is bounded (2 minutes by default) and covers the ground link only: navigation still
+  relies on GNSS, and visual navigation is roadmap.
 - **One forward camera by default.** An aircraft that never enters its field of view cannot be seen. The acoustic
   network and a five-camera ring are measured above as mitigations, not assumed.
 - **Synthetic sky.** Detection works on rendered pixels, so misses and false alarms are emergent, but the sky,
@@ -209,19 +252,20 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 src/kestrel/
   mission/      schema, rule parser, LLM planner, validator, task geometry, executive
   perception/   camera + gimbal, sky renderer, detector, tracker, bird/drone classifier, acoustic network
-  interop/      SAPIENT messages, UTM conversion
   guidance/     paths, speed planning, reference filter, standoff observation
   safety/       runtime monitor, energy model
   control/      cascaded position + SE(3) attitude control, mixer
   sim/          rigid-body quadrotor, wind, intruders, birds, world
   vehicle/      Vehicle protocol, simulated vehicle, ArduPilot over MAVLink
-  runtime.py    closed-loop simulation      live.py   real-time loop for MAVLink
+  interop/      SAPIENT messages and tasking, UTM conversion
+  runtime.py    closed-loop simulation      team.py   several observers, one fused picture
+  live.py       real-time loop for MAVLink
   bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | fly
-docs/           architecture, safety case, research and standards map, SAPIENT mapping, decision records,
-                published results, video and its renderer
+docs/           concept of operations, architecture, safety case, research and standards map, SAPIENT
+                mapping, decision records, published results, video and its renderer
 scripts/        SITL flight recording; benchmark result collection
-configs/        default, acoustic, camera ring, birds, everything on
-scenarios/      world definitions (fence, sites, wind, intruders, birds)
+configs/        default, acoustic, acoustic with the jam-resilient link policy, camera ring, birds, everything on
+scenarios/      airfield, airfield with birds, harbour (sea surface)
 tests/          unit, property, closed-loop and SITL tests
 ```
 

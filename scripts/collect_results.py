@@ -107,9 +107,11 @@ def _collect(prefix: str, key: str, seed0: int) -> dict[str, Any] | None:
         shutil.copy(src / "summary.json", dst / "summary.json")
         shutil.copy(src / "results.csv", dst / "results.csv")
     else:  # merge parts
-        parts = sorted(p for p in Path(prefix).parent.glob(f"{Path(prefix).name}_{key}_*") if p.is_dir())
+        found = Path(prefix).parent.glob(f"{Path(prefix).name}_{key}_*")
+        parts = sorted(p for p in found if (p / "results.csv").exists())  # finished parts only
         if not parts:
-            return json.loads((dst / "summary.json").read_text(encoding="utf-8")) if dst.exists() else None
+            done = dst / "summary.json"
+            return json.loads(done.read_text(encoding="utf-8")) if done.exists() else None
         dst.mkdir(parents=True, exist_ok=True)
         rows = [r for p in parts for r in _rows(p / "results.csv")]
         rows.sort(key=lambda r: r["scenario"])
@@ -190,7 +192,7 @@ def node_row(label: str, s: dict[str, Any]) -> str:
         f"| {label} | {_mp(s.get('cue_to_track_s'))} | {_mp(s.get('entry_to_track_s'))} "
         f"| {s['runs_confirmed']}/{s['runs']} "
         f"| {err_txt} "
-        f"| {s['separation_violations']}/{s['runs']} | {s['landed_safely']}/{s['runs']} "
+        f"| {s['separation_violations']}/{s['runs']} | {s['completed_and_landed']}/{s['runs']} "
         f"| {jam_txt} | {s['reports_buffered']} |"
     )
 
@@ -225,7 +227,7 @@ def print_tables() -> None:
         "runs with a drone confirmed",
         "intruder position error (median)",
         "runs inside 12 m",
-        "landed",
+        "missions completed",
         "intruder held while jammed",
         "reports sent late",
     ]
