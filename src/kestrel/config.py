@@ -69,8 +69,25 @@ class CameraParams(_Strict):
     gimbal_rate_deg_s: float = 90.0
     gimbal_jitter_deg: float = 0.15  # residual stabilisation error
     rate_hz: float = 10.0
+    # Camera layout: yaw of each camera relative to the nose. [0] is one forward camera;
+    # [0, 72, 144, -144, -72] is a five-camera ring with full 360 degree coverage at 75 deg hfov.
+    yaw_offsets_deg: tuple[float, ...] = (0.0,)
     noise_sigma: float = 2.0  # grey levels (0..255)
     latency_s: float = 0.05
+
+
+class AcousticParams(_Strict):
+    """Ground acoustic cueing network (off by default). Sources in perception/acoustic.py."""
+
+    enabled: bool = False
+    node_spacing_m: float = 100.0  # grid over the operating area
+    range_m: float = 250.0  # small quadcopter, conservative end of "hundreds to a few thousand m"
+    bearing_sigma_deg: float = 2.0  # single-node azimuth accuracy reported for fielded dishes
+    detection_probability: float = 0.8  # per node, per update
+    min_nodes: int = 2  # bearings needed to triangulate a fix
+    rate_hz: float = 1.0
+    latency_s: float = 1.0  # bearings are collected and correlated before a fix is published
+    cue_memory_s: float = 3.0  # how long a fix is used after it was heard
 
 
 class StateNoise(_Strict):
@@ -92,7 +109,10 @@ class DetectorParams(_Strict):
     min_area_px: int = 2
     max_area_px: int = 400
     max_aspect: float = 4.0
-    horizon_margin_deg: float = 1.5  # ignore everything below the horizon + margin
+    # Search region ends this far above the true horizon (negative: below it). -1 deg lets the
+    # detector see same-altitude traffic, which sits on the horizon; the background there is haze
+    # at kilometre range. Real skyline clutter (treelines) further down is not modelled.
+    horizon_margin_deg: float = -1.0
 
 
 class TrackerParams(_Strict):
@@ -106,6 +126,9 @@ class TrackerParams(_Strict):
     confirm_window: int = 6
     max_coast_s: float = 5.0  # lost tracks linger with growing uncertainty: separation keeps respecting them
     max_position_std: float = 25.0
+    # Classify tracks as bird or drone from wing-beat flicker (perception/classify.py). Off by
+    # default so the bird-free benchmarks are unchanged; configs/birds.yaml turns it on.
+    classify_birds: bool = False
 
 
 # --------------------------------------------------------------------------- world
@@ -148,6 +171,9 @@ class WorldConfig(_Strict):
         default_factory=lambda: [(-150.0, -150.0), (150.0, -150.0), (150.0, 150.0), (-150.0, 150.0)]
     )
     home: XYZ = (0.0, 0.0, 0.0)
+    # Geodetic position (lat deg, lon deg, alt m above the geoid) of the local ENU origin, used
+    # for reports to other systems. Default: ArduPilot SITL's default home.
+    origin_lla: XYZ = (-35.363261, 149.165230, 584.0)
     sites: dict[str, Site] = Field(default_factory=dict)
     wind: WindParams = WindParams()
 
@@ -172,8 +198,9 @@ class SafetyLimits(_Strict):
     separation_margin_sigmas: float = 2.0
     range_uncertainty_floor: float = 0.15  # size-based range is never better than this fraction
     intruder_max_speed: float = 8.0  # for the reachable-set keep-out around unobserved tracks
-    reaction_time_s: float = 0.6  # sensing + autonomy + autopilot latency budget
+    reaction_time_s: float = 0.8  # camera latency + 4-frame track confirmation + autonomy + autopilot
     energy_reserve_fraction: float = 0.20
+    traffic_contingency_fraction: float = 1.0  # extra plan energy held for traffic delays
     rtl_speed: float = 6.0
     link_loss_timeout_s: float = 5.0
     land_speed: float = 0.8
@@ -188,8 +215,28 @@ class IntruderConfig(_Strict):
     size: XY = (45.0, 25.0)  # pattern half-extent (x, y)
     speed: float = 5.0
     waypoints: list[XYZ] = Field(default_factory=list)
-    appear_at_s: float = 0.0
+    appear_at_s: float = 0.0  # time the intruder reaches its pattern
+    # A late intruder flies in from this far outside its pattern start (straight, level, at its
+    # speed) instead of appearing out of nowhere next to the observer.
+    ingress_m: float = 150.0
     span_m: float = 0.35
+
+
+class BirdConfig(_Strict):
+    """Birds in the operating area: the main source of false alarms for drone detection.
+
+    Defaults describe medium birds (corvids, pigeons, gulls) whose size at range is close
+    to a small drone's. Many birds fly intermittently, alternating flapping and gliding;
+    a gliding bird has no wing-beat to give it away.
+    """
+
+    count: int = 0  # birds present at any time (a bird that leaves is replaced)
+    span_m: XY = (0.5, 1.0)
+    speed: XY = (8.0, 13.0)
+    altitude: XY = (10.0, 60.0)  # AGL
+    flap_hz: XY = (3.0, 6.0)
+    glide_fraction: float = 0.3  # share of time spent gliding
+    mean_bout_s: float = 2.5  # mean length of a flapping bout
 
 
 class LinkLossEvent(_Strict):
@@ -203,6 +250,7 @@ class Scenario(_Strict):
     max_duration_s: float = 420.0
     world: WorldConfig = WorldConfig()
     intruders: list[IntruderConfig] = Field(default_factory=list)
+    birds: BirdConfig = BirdConfig()
     link_loss: list[LinkLossEvent] = Field(default_factory=list)
 
 
@@ -211,6 +259,7 @@ class Config(_Strict):
     control: ControlGains = ControlGains()
     camera: CameraParams = CameraParams()
     state_noise: StateNoise = StateNoise()
+    acoustic: AcousticParams = AcousticParams()
     detector: DetectorParams = DetectorParams()
     tracker: TrackerParams = TrackerParams()
     safety: SafetyLimits = SafetyLimits()

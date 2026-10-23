@@ -5,29 +5,36 @@
 ![Python 3.11-3.13](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)
 
 Tell a small drone, in plain English, to *"survey the north field at 25 m and if you see a drone, follow it from
-30 m for 60 seconds, then come home"*. Kestrel turns that into a validated flight plan, flies it, finds the other
-aircraft **in camera pixels**, tracks it, holds a safe standoff while observing it, resumes the survey and lands. A
-language model writes the plan; it never touches the controls. Every setpoint passes an independent safety monitor
-that no planner, learned or not, can get past.
+30 m for 60 seconds, then come home"*. Kestrel turns that into a validated flight plan and flies it. It finds other
+aircraft **in camera pixels**, tells drones from birds, takes cues from a ground microphone network, keeps clear,
+shadows the intruder at a safe standoff, reports everything in **SAPIENT**, the message standard NATO uses for
+counter-drone sensors, then resumes the survey and lands. A language model writes the plan; it never touches the
+controls. Every setpoint passes an independent safety monitor that no planner, learned or not, can get past.
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
-🎬 **[Project video (2 min)](docs/video/kestrel_demo.mp4)**: the instruction, the checked plan, a rejected unsafe plan,
-the closed-loop flight with a pixel-level view of the intruder, the same code flying ArduCopter SITL, and the measured
-results. Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
+🎬 **[Project video (3 min 20 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
+rejected unsafe plan, a closed-loop flight with birds and acoustic cueing, bird-versus-drone on real rendered pixels,
+SAPIENT output, the same code flying ArduCopter SITL, and the measured results against a no-avoidance baseline.
+Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
 
 | | how | measured |
 |---|---|---|
 | **Plan from language** | local LLM (Ollama) constrained to a JSON Schema, re-validated, one repair round, deterministic fallback; stop/abort/land bypass the model | malformed, invented-site and garbage outputs all rejected in tests; same plan with or without a model |
-| **Check before flight** | geofence, altitude band, speed, standoff vs. separation, battery energy | flown / estimated energy: 0.92 (median, benchmark) |
-| **See other aircraft** | small-target sky detector on rendered frames: black top-hat, robust threshold, horizon mask, darker-than-sky test | ~80% of frames detected out to 60 m on 2-7 px targets; 0 false alarms in 160 random cloudy-sky frames |
-| **Track them** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.5 m median / 5.2 m p90 position error at ~30 m range |
-| **Observe safely** | standoff guidance from below (target against sky), parallax orbit, stabilised gimbal, contact watch, escape velocity | intruder in view 100% of shadowing time; median-run closest approach 13.3 m (limit 12 m); see [Results](#results) for the runs that went inside it |
+| **Check before flight** | geofence, altitude band, speed, standoff vs. separation, battery energy with a traffic contingency | 7 of 216 benchmark runs used more than the estimate (worst 1.2×, two intruders giving way); none used more than 27 of the 62 Wh usable |
+| **See other aircraft** | small-target sky detector on rendered frames: black top-hat, robust threshold, horizon mask, darker-than-sky test | 0.35 m drone: every frame to 45 m, about half at 60 m |
+| **Tell birds from drones** | wing-beat flicker in the track's brightness, scored against sensor noise | held out: no drone called a bird; 73% of flapping birds rejected; gliding birds not ([0009](docs/decisions/0009-birds.md)) |
+| **Hear what the camera cannot see** | ground microphone grid, 2° bearings, triangulated fixes that point the camera and widen the keep-out | see the results matrix |
+| **Track** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.6 m median position error while shadowing at ~30 m |
+| **Keep clear** | give way to crossing traffic, standoff guidance, escape velocity; separation buffer from uncertainty, reachable set and stopping distance | risk ratio against no avoidance, below |
+| **Report** | SAPIENT ICD v7 registration, status and detection reports, UTM coordinates ([interop.md](docs/interop.md)) | mandatory fields and coordinates tested; no conformance run yet |
 | **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink) | full mission flown on **ArduCopter 4.6.3 SITL in CI** |
 
-> **Status (October 2026, v0.1).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
-> a real airframe**, the camera and aircraft models are simplified, and nothing is flight-qualified. The known gaps
-> are listed under [Limitations](#limitations) and in [docs/safety.md](docs/safety.md).
+> **Status (October 2026, v0.2).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
+> a real airframe**, has not been evaluated on real air-to-air footage, and nothing is flight-qualified. The camera,
+> bird and aircraft models are simplified. The known gaps are under [Limitations](#limitations), in
+> [docs/safety.md](docs/safety.md) and, against published standards, in [docs/research.md](docs/research.md).
+> Kestrel is an observer: it detects, tracks, keeps clear and reports. It has no intercept or engagement function.
 
 ## Quick start
 
@@ -38,9 +45,13 @@ pip install -e ".[dev]"
 # parse + validate only (instant)
 kestrel plan "take off, orbit the tower twice at 20 m with a radius of 30 m, then search the lake for 2 minutes, then come back"
 
-# closed-loop simulation with report plots and the demo animation (about 2.5 min on a 2-core machine)
+# closed-loop simulation with report plots and the demo animation (a few minutes on a 2-core machine)
 kestrel sim "Take off to 25 m, survey the north field at 25 m with 30 m spacing, and if you see a drone, \
 follow it from 30 m for 60 seconds, then return home" --gif --out runs/demo
+
+# everything on: birds in the sky, microphones, the bird/drone classifier, SAPIENT reports
+kestrel sim "survey the north field at 25 m and follow any drone for 45 seconds" \
+  --config configs/full.yaml --scenario scenarios/airfield_birds.yaml --sapient runs/sapient.jsonl
 
 # operator emergencies are injected by time: abort at t = 60 s
 kestrel sim "survey the north field at 25 m" --command "60:abort"
@@ -67,42 +78,48 @@ What the planner hands the rest of the stack:
 $ kestrel plan "survey the lake at 20 m with 6 m spacing then hover for 25 minutes"
 planner: rules
 plan: takeoff(altitude=20.0) -> survey(area=lake, altitude=20.0, spacing=6.0) -> hold(duration_s=1500.0) -> return_home()  [on_contact=report]
-estimate: 27.6 min, 97.9 Wh of 61.6 Wh usable
+estimate: 27.6 min, 97.9 Wh nominal, 195.9 Wh with traffic contingency, of 61.6 Wh usable
 warning: added takeoff at the start
 warning: added return_home at the end
-ERROR: estimated energy 98 Wh exceeds the 62 Wh usable (20% reserve held back)
+ERROR: estimated energy with traffic contingency 196 Wh exceeds the 62 Wh usable (20% reserve held back)
 result: REJECTED
 ```
 
 ## Results
 
-A Monte Carlo benchmark flies the same mission (survey, shadow any contact for 45 s, return) against
-24 randomised encounters: intruder pattern (figure-eight, orbit, random waypoints), speed 2-6 m/s, altitude
-26-40 m, position, appearance time, wind 0-5 m/s with gusts, and a different sky each run.
+The same mission (survey, follow any drone for 45 s, return) is flown against the same 24 randomised encounters in
+each configuration: intruder pattern (figure-eight, orbit, random waypoints), speed 2-6 m/s, altitude 26-40 m,
+position, arrival time (late intruders fly in from 150 m out), wind 0-5 m/s with gusts, and a different sky each run.
+These encounters (seeds 4000-4023) were never used while developing: sets from 1000 to 3999 were used for tuning
+and for diagnosing the faults in the decision records.
 
-| metric | result |
-|---|---|
-| missions completed and landed (all within 0.2 m of home) | 24/24 |
-| runs where a contact was detected and shadowed | 23/24 |
-| runs with any time inside the 12 m minimum separation | 7/24, each for at most 3.2 s |
-| closest approach over all runs (median run) | 7.8 m (13.3 m) |
-| track position error while shadowing, median of runs (p90 of runs) | 4.5 m (5.2 m) |
-| intruder inside the camera frame while shadowing (median run) | 100% |
-| false tracks per run (median) | 3 |
-| flown energy / pre-flight estimate (median) | 0.92 |
+Definitions follow detect-and-avoid practice, scaled to drone-to-drone encounters ([research.md](docs/research.md)):
+**loss of well clear** is entering a 12 m sphere around another aircraft (Kestrel's own figure, since no standard
+exists for drone-to-drone well clear); an **encounter is detected** if the intruder is correctly tracked for the 3 s
+before it first comes within 30 m, after the Amazon Prime Air AOT benchmark; a **false alarm** is a track reported
+as a drone that never corresponds to one.
 
-**About the 7 runs that went inside 12 m.** The closest approaches were 7.8, 9.6, 9.7, 10.0, 10.4, 11.4 and
-11.9 m, none longer than 3.2 s and none a collision. In six, the intruder was being tracked, and all six involved
-intruders at 4.1-5.4 m/s, the fast end of the tested range, where an intruder turning towards the observer closes
-faster than the observer can open the gap. In the seventh, the intruder passed beside the observer outside the
-camera's view and was never detected.
-Diagnosing an earlier run of this benchmark (9 runs, worst 5.1 m) produced the escape-velocity and retreat-on-loss
-behaviours ([0004](docs/decisions/0004-separation.md)). The remaining gap is the next thing to work on, not something
-to tune away.
+| configuration | runs inside 12 m (entries) | closest approach | encounters detected 3 s before 30 m | false alarms per flight hour | missions completed (returned early for traffic) |
+|---|---|---|---|---|---|
+| no avoidance (baseline) | 18/24 (23) | 3.6 m | 18/24 | 0.0 | 24/24 (0) |
+| one camera | 1/24 (1) | 7.7 m | 18/24 | 1.2 | 22/24 (2) |
+| camera + acoustic cueing | 0/24 (0) | 12.1 m | 21/24 | 0.0 | 20/24 (4) |
+| five-camera ring | 1/24 (1) | 12.0 m | 21/24 | 1.2 | 23/24 (1) |
+| 4 birds, no classifier | 1/24 (2) | 8.9 m | 17/24 | 16.8 | 23/24 (1) |
+| 4 birds + classifier | 1/24 (1) | 11.4 m | 18/24 | 4.8 | 24/24 (0) |
+| two intruders | 15/24 (26) | 1.0 m | 11/24 | 5.6 | 22/24 (2) |
+| two intruders, no avoidance | 20/24 (30) | 1.3 m | 16/24 | 2.1 | 24/24 (0) |
+| two intruders, camera + acoustic | 4/24 (5) | 3.7 m | 15/24 | 2.3 | 12/24 (12) |
 
-Reproduce with `kestrel bench --runs 24`; per-run rows are in
-[docs/results/bench_results.csv](docs/results/bench_results.csv). A test fails CI if this table and
-[the committed summary](docs/results/bench_summary.json) disagree.
+| birds in the area | bird tracks | bird tracks reported as a drone | drone tracks reported as a drone |
+|---|---|---|---|
+| 4 birds, no classifier | 27 | 27 | 85/85 |
+| 4 birds + classifier | 26 | 8 | 84/96 |
+
+With one intruder, avoidance with one camera has a **risk ratio of 0.06**: 1 of 24 runs lost well clear, against 18 of 24 flying the same encounters without avoidance. Each added layer is measured on the same encounters. With two intruders the ratio is 0.75 (15 against 20 of 24), because one forward camera cannot watch two aircraft; the acoustic network brings it to 4 of 24, at the cost of 12 missions ending early for traffic ([0013](docs/decisions/0013-two-intruders.md)). With birds in the area, the classifier cuts false alarms from 16.8 to 4.8 per flight hour. 8 of 26 bird tracks were still reported as drones (a gliding bird shows no wing-beat; [0009](docs/decisions/0009-birds.md)). 12 of 96 drone tracks were never reported as drones, being too faint or brief to classify; the safety monitor kept clear of them all the same.
+
+Reproduce any row with the command in [docs/results/matrix.json](docs/results/matrix.json); per-run rows are in
+`docs/results/<set>/results.csv`. A test fails CI if these tables and the committed results disagree.
 
 ![Mission overview](docs/figures/overview.png)
 
@@ -113,9 +130,13 @@ Reproduce with `kestrel bench --runs 24`; per-run rows are in
 ```mermaid
 flowchart LR
     T[operator text] --> P[planner<br/>LLM or rules] --> V[validator] --> EX[executive]
-    CAM[camera frames] --> D[detector] --> K[tracker] --> EX
+    CAM[camera frames] --> D[detector] --> K[tracker +<br/>bird/drone classifier] --> EX
+    MIC[ground microphones] --> Q[acoustic cues] --> EX
     EX --> S[safety monitor] --> AP[autopilot<br/>sim or ArduPilot]
     K --> S
+    Q --> S
+    K --> SAP[SAPIENT reports]
+    Q --> SAP
 ```
 
 Three independent barriers stand between language and motors: the **schema** (the model can only express known
@@ -123,11 +144,11 @@ tasks), **static validation** (the plan must fit the fence, altitude band, batte
 takeoff) and a **runtime monitor** (every setpoint, every tick). Details in [docs/architecture.md](docs/architecture.md)
 and [docs/safety.md](docs/safety.md).
 
-The separation buffer around another aircraft is the part that most needed simulation to get right. It is the minimum
-separation plus the larger of the track uncertainty (floored at 15% of range, because monocular range rests on an
-assumed target size) and a reachable set that grows while the aircraft is unseen, plus stopping distance at the current
-closing speed. Each term exists because an encounter broke the limit without it:
-[docs/decisions/0004-separation.md](docs/decisions/0004-separation.md).
+The separation buffer around another aircraft is the minimum separation plus the larger of the track uncertainty
+(floored at 15% of range, because monocular range rests on an assumed target size) and a reachable set that grows
+while the aircraft is unseen, plus stopping distance at the current closing speed. It applies to every contact: a
+bird is a collision hazard too, and a drone mistaken for a bird must not lose protection. The classifier changes what
+is reported and followed, never what is avoided.
 
 ## Engineering notes
 
@@ -138,55 +159,69 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | [0001](docs/decisions/0001-llm-plans-never-pilots.md) | language control is slow, non-deterministic, sometimes wrong | the model writes a schema-checked plan only |
 | [0002](docs/decisions/0002-darker-than-sky.md) | gaps between clouds keep a constant bearing and were tracked as an aircraft pacing the observer | darker-than-clear-sky test: 98.6% of clutter rejected |
 | [0003](docs/decisions/0003-stabilised-gimbal.md) | rigid camera pointed at the ground whenever the airframe tilted | stabilised gimbal with commanded tilt |
-| [0004](docs/decisions/0004-separation.md) | four distinct separation violations (5.0 m to 1.8 m) | range floor, stopping distance, reachable set, contact watch |
+| [0004](docs/decisions/0004-separation.md) | separation violations, one cause at a time | range floor, stopping distance, reachable set, contact watch, giving way |
 | [0005](docs/decisions/0005-attitude-limit-cycle.md) | 180° heading reversal triggered a roll/pitch limit cycle and a fall | yaw slew limit, attitude-priority mixer: 47.6° → 3.6° tilt |
 | [0006](docs/decisions/0006-cascaded-position-loop.md) | 13.8 m/s against an 8 m/s limit | cascaded, speed-saturated position loop |
 | [0007](docs/decisions/0007-speed-planning.md) | 15 m orbit took 90 s on SITL | curvature-aware speed profile: 22 s |
 | [0008](docs/decisions/0008-mavlink-adapter.md) | SITL armed and disarmed in a loop | heartbeat-derived ids, single reader, origin on the ground |
+| [0009](docs/decisions/0009-birds.md) | no birds in the sky, so false alarms were understated | birds with intermittent flight; wing-beat flicker classifier |
+| [0010](docs/decisions/0010-area-true-rendering.md) | sub-pixel parts drawn too large: drones detectable too far out | area-true drawing; every benchmark re-run |
+| [0011](docs/decisions/0011-cues-identity-and-the-way-home.md) | giving way to cued aircraft already tracked; one drone followed three times; stuck on the way home | cues explained by a track dropped; aircraft identity across tracks; homeward yield cap |
+| [0012](docs/decisions/0012-contact-watch-memory.md) | camera kept staring at where an intruder had been a minute earlier while traffic came head-on | watch a stale contact for 15 s, then look where you are going: 3/24 → 1/24 runs inside 12 m |
+| [0013](docs/decisions/0013-two-intruders.md) | two intruders: one camera loses well clear in 15/24 runs, mostly to the aircraft it is not looking at | measured, explained; acoustic cueing cuts it to 4/24 at the cost of early returns |
 
 ## Testing
 
 | job | what | runs |
 |---|---|---|
 | `lint` | ruff, ruff format, mypy `--strict` | every push |
-| `unit` | 63 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception checks, LLM planner against a local HTTP server | Python 3.11, 3.12, 3.13 |
+| `unit` | 90 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, SAPIENT message fields and UTM against PROJ, LLM planner against a local HTTP server | Python 3.11, 3.12, 3.13 |
 | `closed-loop` | full-stack simulations: detect, track and keep separation; operator abort; link-loss failsafe; rejected plans never fly | every push |
 | `sitl` | builds ArduCopter 4.6.3 SITL (cached) and flies a mission through GUIDED mode | every push |
 
 ```bash
-pytest -m "not slow and not sitl"   # ~20 s
+pytest -m "not slow and not sitl"   # about a minute
 pytest -m slow                      # a few minutes
 ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 ```
 
 ## Limitations
 
-- **One forward camera.** An aircraft that never enters the field of view cannot be avoided. After first contact the
-  observer keeps its camera on the intruder's last known position while nearby, but an unknown aircraft arriving from
-  behind is not seen. A rear camera, radar, or a Remote ID / ADS-B feed would close this.
-- **Dark targets against sky.** Sunlit targets brighter than the sky and targets below the horizon are out of scope
-  for the detector. A learned detector can replace it behind the same `Detection` interface.
-- **Monocular range** rests on an assumed target size (0.35 m). A much smaller aircraft reads as farther away than it
-  is; the safety monitor's 15% range-uncertainty floor covers modest errors, not a wrong aircraft class.
+- **Simulation, not flight.** No real airframe, no real footage. The first roadmap item is evaluating the detector
+  on public real air-to-air data; after that, flights with a cooperating target drone.
+- **One forward camera by default.** An aircraft that never enters its field of view cannot be seen. The acoustic
+  network and a five-camera ring are measured above as mitigations, not assumed.
+- **Synthetic sky.** Detection works on rendered pixels, so misses and false alarms are emergent, but the sky,
+  optics and targets are simplified. Sunlit targets brighter than the sky and targets below the horizon are out of
+  scope for the detector.
+- **Birds** are medium-sized and fly intermittently; gliding birds are reported as drones, because the cue the
+  classifier uses (the wing-beat) is absent.
+- **Acoustic model** has bearing noise, range and latency, but no wind, terrain or urban noise.
+- **Monocular range** rests on an assumed target size (0.35 m). The safety monitor's 15% range-uncertainty floor
+  covers modest errors, not a wrong aircraft class.
+- **SAPIENT** output follows the published ICD's field names and units but is written as JSON; the protobuf encoding
+  and a conformance test against a fusion node are not done ([interop.md](docs/interop.md)).
 - **ArduPilot only.** PX4 OFFBOARD is detected and refused rather than half-supported.
-- **Simplified models**: linear drag, first-order motors, a synthetic sky, kinematic intruders.
 
 ## Repository layout
 
 ```text
 src/kestrel/
   mission/      schema, rule parser, LLM planner, validator, task geometry, executive
-  perception/   camera + gimbal, sky renderer, detector, tracker
+  perception/   camera + gimbal, sky renderer, detector, tracker, bird/drone classifier, acoustic network
+  interop/      SAPIENT messages, UTM conversion
   guidance/     paths, speed planning, reference filter, standoff observation
   safety/       runtime monitor, energy model
   control/      cascaded position + SE(3) attitude control, mixer
-  sim/          rigid-body quadrotor, wind, intruders, world
+  sim/          rigid-body quadrotor, wind, intruders, birds, world
   vehicle/      Vehicle protocol, simulated vehicle, ArduPilot over MAVLink
   runtime.py    closed-loop simulation      live.py   real-time loop for MAVLink
   bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | fly
-docs/           architecture, safety case, decision records, published results, video and its renderer
-scripts/        record_sitl_flight.py: fly ArduCopter SITL and save the log the video uses
-scenarios/      world definitions (fence, sites, wind, intruders)
+docs/           architecture, safety case, research and standards map, SAPIENT mapping, decision records,
+                published results, video and its renderer
+scripts/        SITL flight recording; benchmark result collection
+configs/        default, acoustic, camera ring, birds, everything on
+scenarios/      world definitions (fence, sites, wind, intruders, birds)
 tests/          unit, property, closed-loop and SITL tests
 ```
 

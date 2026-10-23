@@ -1,4 +1,22 @@
-"""Run metrics, computed against ground truth the autonomy never sees."""
+"""Run metrics, computed against ground truth the autonomy never sees.
+
+Definitions follow the detect-and-avoid literature, scaled to small-drone encounters:
+
+* **Encounter detected** (after the Amazon AOT benchmark, which requires a track for
+  3 s before the intruder is within 300 m of a manned-aircraft-sized encounter): a
+  correct track held for ``DETECT_LEAD_S`` before the intruder first comes within
+  ``DETECT_RANGE_M``, Kestrel's 30 m standoff.
+* **False alarm**: a *confirmed* track that never corresponds to a real aircraft.
+  Short-lived tentative tracks are not alarms (they never reach the autonomy).
+* **Birds**: a confirmed track on a bird is a false alarm only if it is *reported as a
+  drone* (with the classifier off, every track is). Bird tracks are matched by bearing,
+  since a bird's range estimated from an assumed drone size is wrong by the size ratio.
+* **Loss of well clear (LoWC)**: an entry into the ``min_separation`` sphere (12 m).
+  ASTM F3442's well-clear volume (610 m x 77 m) is defined for manned traffic; no
+  standard exists for drone-to-drone well clear, so Kestrel states its own. Separation
+  and LoWC count the nearest intruder at each instant; detection and tracking metrics
+  refer to the first intruder.
+"""
 
 from __future__ import annotations
 
@@ -10,9 +28,17 @@ import numpy as np
 from kestrel.geofence import Geofence
 from kestrel.runtime import RunResult
 
+DETECT_LEAD_S = 3.0
+DETECT_RANGE_M = 30.0
+TRACK_MATCH_M = 15.0
+
 
 def _nan(x: float) -> float | None:
     return None if x is None or (isinstance(x, float) and math.isnan(x)) else round(float(x), 3)
+
+
+def present_any(d: np.ndarray) -> np.ndarray:
+    return np.asarray(~np.isnan(d))
 
 
 def compute_metrics(r: RunResult) -> dict[str, Any]:
@@ -43,18 +69,39 @@ def compute_metrics(r: RunResult) -> dict[str, Any]:
         min_fence_margin_m=round(min(fence.signed_distance(p) for p in pos[::10]), 1),
         final_distance_from_home_m=round(float(np.linalg.norm(pos[-1, 0:2] - home[0:2])), 2),
         false_tracks=r.false_tracks,
+        false_alarms=r.false_confirmed,
+        bird_tracks=r.bird_tracks,
+        birds_declared_drone=r.birds_declared_drone,
+        drones_matched=r.drones_matched,
+        drones_declared=r.drones_declared,
+        flight_hours=round(float(t[-1]) / 3600.0, 4),
         safety_interventions=dict(r.safety_counts),
         safety_latches=list(r.safety_reasons),
     )
+    bird_d = a["bird_dist"]
+    if np.isfinite(bird_d).any():
+        m["min_bird_separation_m"] = round(float(np.min(bird_d)), 2)
     tgt = a["target"]
     present = ~np.isnan(tgt[:, 0])
     if present.any():
-        sep = np.linalg.norm(pos - tgt, axis=1)
+        sep = np.linalg.norm(pos - tgt, axis=1)  # to the first intruder: detection and tracking metrics
+        near = a["intruder_dist"]  # to whichever intruder is nearest: separation metrics
         dt = float(np.median(np.diff(t))) if len(t) > 1 else 0.05
-        m["min_separation_m"] = round(float(np.nanmin(sep)), 2)
-        m["time_below_min_separation_s"] = round(float(np.sum(sep[present] < lim.min_separation) * dt), 2)
+        m["min_separation_m"] = round(float(np.nanmin(near)), 2)
+        below = near[present_any(near)] < lim.min_separation
+        m["time_below_min_separation_s"] = round(float(np.sum(below) * dt), 2)
         trk = a["track"]
-        good = present & ~np.isnan(trk[:, 0]) & (np.linalg.norm(trk - tgt, axis=1) < 15.0)
+        good = present & ~np.isnan(trk[:, 0]) & (np.linalg.norm(trk - tgt, axis=1) < TRACK_MATCH_M)
+        m["lowc_events"] = int(np.sum(np.diff(np.concatenate([[0], below.astype(int)])) == 1))
+        inside = np.flatnonzero(present & (sep < DETECT_RANGE_M))
+        if len(inside):
+            k = int(inside[0])
+            window = (t > t[k] - DETECT_LEAD_S) & (t <= t[k])
+            m["encounter"] = True
+            m["encounter_detected"] = bool(good[window].all()) if window.any() else False
+        else:
+            m["encounter"] = False
+            m["encounter_detected"] = None
         first = np.argmax(good) if good.any() else None
         m["time_to_first_track_s"] = (
             _nan(float(t[first] - t[np.argmax(present)])) if first is not None else None
@@ -73,5 +120,7 @@ def compute_metrics(r: RunResult) -> dict[str, Any]:
                 range_mean_m=round(float(rng.mean()), 1),
                 range_min_m=round(float(rng.min()), 1),
             )
+    m["yields"] = sum(1 for e in r.events if e.kind == "yield")
+    m["returned_for_traffic"] = any(e.kind == "abort" and "traffic" in e.detail for e in r.events)
     m["events"] = [f"{e.t:.1f}s {e.kind}: {e.detail}" for e in r.events if e.kind != "contact"]
     return m

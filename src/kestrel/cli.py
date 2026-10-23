@@ -70,8 +70,30 @@ def cmd_sim(args: argparse.Namespace) -> int:
     if args.seed is not None:
         sc = sc.model_copy(update={"seed": args.seed})
     record = 3 if args.gif else 0
+    sapient = None
+    if args.sapient:
+        from kestrel.interop.sapient import SapientExporter, SapientOptions
+
+        sapient = SapientExporter(
+            SapientOptions(
+                origin_lla=sc.world.origin_lla,
+                altitude_band_m=(0.0, cfg.safety.max_altitude),
+                seed=sc.seed,
+            )
+        )
     print(f"simulating '{sc.name}' (seed {sc.seed}) ...", flush=True)
-    res = run(args.instruction, cfg, sc, _backend(args), _parse_commands(args.command), record_every=record)
+    res = run(
+        args.instruction,
+        cfg,
+        sc,
+        _backend(args),
+        _parse_commands(args.command),
+        record_every=record,
+        sapient=sapient,
+    )
+    if sapient is not None:
+        sapient.write_jsonl(args.sapient)
+        print(f"{len(sapient.messages)} SAPIENT messages written to {args.sapient}")
     out = Path(args.out)
     m = compute_metrics(res)
     write_report(res, m, out, gif=args.gif)
@@ -90,7 +112,17 @@ def cmd_bench(args: argparse.Namespace) -> int:
     from kestrel.bench import run_benchmark
 
     cfg, sc = _load(args)
-    summary = run_benchmark(cfg, sc, args.runs, Path(args.out), jobs=args.jobs)
+    summary = run_benchmark(
+        cfg,
+        sc,
+        args.runs,
+        Path(args.out),
+        jobs=args.jobs,
+        seed0=args.seed0,
+        avoidance=not args.no_avoidance,
+        intruders=args.intruders,
+        first=args.first,
+    )
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -141,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default="runs/latest")
     p.add_argument("--gif", action="store_true", help="also render demo.gif")
     p.add_argument("--seed", type=int)
+    p.add_argument("--sapient", metavar="PATH", help="also write SAPIENT (ICD v7) reports as JSON lines")
     p.add_argument(
         "--command",
         action="append",
@@ -153,7 +186,13 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("bench", help="Monte Carlo benchmark")
     p.add_argument("--runs", type=int, default=20)
+    p.add_argument(
+        "--seed0", type=int, default=1000, help="first encounter seed (1000 tuning set, 2000 held-out set)"
+    )
     p.add_argument("--jobs", type=int, default=2)
+    p.add_argument("--no-avoidance", action="store_true", help="unmitigated baseline for the risk ratio")
+    p.add_argument("--intruders", type=int, default=1, help="intruders per encounter")
+    p.add_argument("--first", type=int, default=0, help="index of the first encounter (to split a set)")
     p.add_argument("--out", default="runs/bench")
     common(p)
     p.set_defaults(func=cmd_bench)

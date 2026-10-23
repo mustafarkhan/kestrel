@@ -42,10 +42,12 @@ def test_sky_mask_never_covers_ground(
     det = SkyTargetDetector(cam, cfg.detector)
     pose = cam.pose(np.array([0, 0, 20.0]), quat_from_euler(roll, pitch, 0.4), tilt)
     mask = det.sky_mask(pose)
+    # the search region may reach the configured margin below the horizon, never further
+    floor = math.sin(math.radians(min(cfg.detector.horizon_margin_deg, 0.0) - 0.2))
     for v in range(0, cam.height, 12):
         for u in range(0, cam.width, 12):
             if mask[v, u]:
-                assert cam.pixel_ray_world(pose, u, v)[2] > 0
+                assert cam.pixel_ray_world(pose, u, v)[2] > floor
 
 
 def _random_frames(cfg: Config, cam: Camera, n: int, seed: int, with_target: bool):
@@ -128,3 +130,28 @@ def test_tracker_follows_one_target_through_misses(cfg: Config, cam: Camera) -> 
     assert len(errs) > 360  # confirmed on the true target almost the whole time
     assert float(np.median(errs)) < 5.0
     assert len({e.ident for e in tracker.estimates(40.0)}) == 1
+
+
+def test_camera_ring_covers_all_bearings(cfg: Config) -> None:
+    ring = cfg.camera.model_copy(update={"yaw_offsets_deg": (0.0, 72.0, 144.0, -144.0, -72.0)})
+    cam = Camera(ring, cfg.vehicle.camera_offset)
+    q = quat_from_euler(0.0, 0.0, 0.3)
+    obs = np.array([0.0, 0.0, 20.0])
+    for bearing in range(0, 360, 5):
+        b = 0.3 + math.radians(bearing)
+        p = obs + 40.0 * np.array([math.cos(b), math.sin(b), 0.08])
+        seen = [off for off in ring.yaw_offsets_deg if cam.in_view(cam.pose(obs, q, 8.0, off), p)]
+        assert seen, f"bearing {bearing} deg not covered"
+    behind = obs + 40.0 * np.array([math.cos(0.3 + math.pi), math.sin(0.3 + math.pi), 0.08])
+    assert not cam.in_view(cam.pose(obs, q, 8.0, 0.0), behind)  # the forward camera alone is blind here
+
+
+def test_late_intruder_flies_in_instead_of_appearing() -> None:
+    cfg = IntruderConfig(pattern="orbit", center=(20, 90, 30), size=(20, 20), speed=4.0, appear_at_s=60.0)
+    it = Intruder(cfg)
+    first = it.state(60.0 - 150.0 / 4.0 + 0.1)  # 150 m ingress at 4 m/s starts 37.5 s early
+    assert first is not None and np.linalg.norm(first[0][0:2]) > 150.0  # starts far from home
+    before, at = it.state(59.99), it.state(60.0)
+    assert before is not None and at is not None
+    assert np.linalg.norm(before[0] - at[0]) < 0.1  # continuous where the ingress meets the pattern
+    assert it.state(0.0) is None  # not yet in the air

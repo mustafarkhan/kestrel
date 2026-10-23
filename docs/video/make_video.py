@@ -1,30 +1,38 @@
 """Render the project video from the repository's own outputs.
 
 Everything on screen comes from this repository: a closed-loop simulation run
-here, the plan validator's real output, the committed benchmark results and the
-committed ArduCopter SITL flight log. Nothing is drawn by hand.
+here, the plan validator's real output, SAPIENT messages from that run, frames
+from the renderer and detector, the committed benchmark results and the
+committed ArduCopter SITL flight log. Nothing is drawn by hand. The context
+slide quotes published sources, named on screen.
 
     python docs/video/make_video.py --out docs/video/kestrel_demo.mp4
 
-Takes about 6 minutes on a 2-core machine (2.5 of them simulating).
+Takes about 12 minutes on a 2-core machine (4 of them simulating).
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import imageio.v2 as imageio
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from kestrel.config import load_config, load_scenario
+from kestrel.interop.sapient import SapientExporter, SapientOptions
+from kestrel.perception.acoustic import node_grid
+from kestrel.perception.camera import Camera
+from kestrel.perception.classify import FlickerClassifier
+from kestrel.perception.detector import SkyTargetDetector
+from kestrel.perception.render import SkyRenderer
 from kestrel.runtime import Frame, RunResult, plan_and_validate, run
+from kestrel.sim.birds import BirdState
 
 ROOT = Path(__file__).resolve().parents[2]
 W, H, FPS = 1280, 720, 30
@@ -40,6 +48,8 @@ ORANGE = (217, 89, 38)
 AQUA = (25, 158, 112)
 RED = (208, 59, 59)
 GREEN = (12, 163, 12)
+PURPLE = (150, 110, 220)
+GREY = (160, 160, 150)
 
 INSTRUCTION = (
     "Take off to 25 m, survey the north field at 25 m with 30 m spacing, and if you see a drone, "
@@ -123,20 +133,58 @@ def slide_title() -> list[Image.Image]:
     def r(t: float) -> Image.Image:
         im = blank()
         d = ImageDraw.Draw(im)
-        d.text((96, 228), "Kestrel", fill=INK, font=sans(92, "Bold"))
-        d.text((100, 344), "a language-tasked aerial observer for small drones", fill=INK2, font=sans(34))
-        d.line([(100, 414), (100 + 380 * min(1, t / 1.2), 414)], fill=BLUE, width=4)
+        d.text((96, 208), "Kestrel", fill=INK, font=sans(92, "Bold"))
+        d.text((100, 324), "a language-tasked aerial observer for small drones", fill=INK2, font=sans(34))
+        d.line([(100, 394), (100 + 380 * min(1, t / 1.2), 394)], fill=BLUE, width=4)
         for i, line in enumerate(
             [
-                "plain-English missions  ·  air-to-air detection and tracking  ·  runtime safety monitor",
+                "plain-English missions  ·  air-to-air detection, tracking and keep-clear  ·  runtime safety monitor",
+                "acoustic cueing  ·  bird/drone discrimination  ·  SAPIENT (NATO C-UAS) reports",
                 "simulation-first  ·  ArduPilot over MAVLink, flown on ArduCopter SITL",
             ]
         ):
-            d.text((100, 444 + 34 * i), line, fill=MUTED, font=sans(22))
+            d.text((100, 424 + 34 * i), line, fill=MUTED, font=sans(22))
         footer(d, "Simulation and SITL only. Not flown on real hardware.")
         return im
 
-    return list(faded(hold(r, 4.5)))
+    return list(faded(hold(r, 5.0)))
+
+
+CONTEXT = [
+    ("About 20 Russian drones entered Polish airspace in September 2025.", "ECFR, Buzzkill (2026)"),
+    ("Romania reported over 40 drone incursions in the first half of 2026.", "ECFR, Buzzkill (2026)"),
+    ("Small, slow drones slip past sensors built for missiles and aircraft;", ""),
+    ("birds are the classic false alarm.", "ECFR, Buzzkill (2026)"),
+    ("Cheap acoustic nodes cue cameras and radar: about 9,500 fielded in Ukraine.", "US Army CALL (2026)"),
+    ("NATO is standardising SAPIENT so sensors from many nations feed one picture.", "Dstl / NATO TIE"),
+]
+
+
+def slide_context() -> list[Image.Image]:
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((96, 80), "Why small drones, and why now", fill=BLUE, font=sans(26, "SemiBold"))
+        y = 150
+        for i, (line, src) in enumerate(CONTEXT):
+            if t < 0.6 * i:
+                continue
+            d.text((96, y), line, fill=INK, font=sans(27, "Medium"))
+            if src:
+                d.text((100, y + 38), src, fill=MUTED, font=sans(17))
+                y += 76
+            else:
+                y += 40
+        d.text(
+            (96, 610),
+            "Kestrel is an observer: it detects, tracks, keeps clear and reports. No intercept or engagement.",
+            fill=INK2,
+            font=sans(22),
+        )
+        footer(d, "Sources quoted on screen; full list in docs/research.md")
+        return im
+
+    return list(faded(hold(r, 11.0)))
 
 
 def slide_instruction() -> list[Image.Image]:
@@ -226,13 +274,6 @@ def slide_rejected(cfg_path: Path, scen_path: Path) -> list[Image.Image]:
 # --------------------------------------------------------------------------- flight
 
 
-@dataclass
-class Segment:
-    t0: float
-    t1: float
-    speed: float
-
-
 CAM_X, CAM_Y, CAM_W, CAM_H = 24, 84, 768, 576
 MAP_X, MAP_Y, MAP_S = 816, 84, 440
 VIEW_LO = np.array([-100.0, -38.0])
@@ -243,14 +284,18 @@ def _to_map(xy: np.ndarray, s: float) -> tuple[float, float]:
     return ((xy[0] - VIEW_LO[0]) / VIEW_SPAN * s, s - (xy[1] - VIEW_LO[1]) / VIEW_SPAN * s)
 
 
-def _caption(beh: str, t: float, events: dict[str, float]) -> str:
+def _caption(beh: str, t: float, events: dict[str, float], yielding: bool, cue_only: bool) -> str:
     t_int, t_res = events.get("interrupt", 1e9), events.get("resume", 1e9)
+    if yielding:
+        return "Giving way: the planned path would pass too close to a contact, so hold the standoff instead"
+    if cue_only:
+        return "Acoustic cue: microphones hear an aircraft the camera has not seen; it is kept clear of until seen"
     if beh == "takeoff":
         return "Take off to 25 m"
     if beh == "survey" and t < t_int:
         return "Survey the north field: lawnmower lanes, camera looking ahead"
     if t_int <= t < t_int + 6:
-        return "Contact: intruder detected in the camera, track confirmed, survey interrupted"
+        return "Contact: drone detected in the camera, track confirmed and classified, survey interrupted"
     if beh == "track":
         return "Shadow from 30 m: below it so it is seen against sky, slow orbit so range becomes observable"
     if beh == "survey" and t >= t_res:
@@ -260,6 +305,19 @@ def _caption(beh: str, t: float, events: dict[str, float]) -> str:
     if beh == "land":
         return "Land and disarm"
     return beh
+
+
+def _intervals(res: RunResult, start: str, end: tuple[str, ...]) -> list[tuple[float, float]]:
+    out, t0 = [], None
+    for e in res.events:
+        if e.kind == start and t0 is None:
+            t0 = e.t
+        elif e.kind in end and t0 is not None:
+            out.append((t0, e.t))
+            t0 = None
+    if t0 is not None:
+        out.append((t0, 1e9))
+    return out
 
 
 def _draw_map(res: RunResult, a: dict[str, np.ndarray], k: int, yaw: float) -> Image.Image:
@@ -283,6 +341,18 @@ def _draw_map(res: RunResult, a: dict[str, np.ndarray], k: int, yaw: float) -> I
     hx, hy = _to_map(np.array(w.home[:2]), s)
     d.ellipse([hx - 12, hy - 12, hx + 12, hy + 12], outline=(*INK, 255), width=4)
     d.text((hx + 18, hy - 6), "home", fill=(*INK2, 255), font=sans(24))
+
+    if res.config.acoustic.enabled:
+        for nx, ny in node_grid(w, res.config.acoustic.node_spacing_m):
+            x, y = _to_map(np.array([nx, ny]), s)
+            if 0 <= x <= s and 0 <= y <= s:
+                d.rectangle([x - 7, y - 7, x + 7, y + 7], outline=(*PURPLE, 200), width=3)
+    for cx, cy in res.log.cues[k]:
+        x, y = _to_map(np.array([cx, cy]), s)
+        d.ellipse([x - 26, y - 26, x + 26, y + 26], outline=(*PURPLE, 255), width=4)
+    for bp in res.log.birds[k]:
+        x, y = _to_map(bp, s)
+        d.line([(x - 12, y - 4), (x, y + 4), (x + 12, y - 4)], fill=(*GREY, 255), width=4)
 
     pos = a["pos"][: k + 1]
     tg = a["target"][max(0, k - 600) : k + 1]
@@ -352,11 +422,19 @@ def _camera(fr: Frame, d: ImageDraw.ImageDraw, im: Image.Image, cam_w: int) -> N
     ]
     for ident, u, v in confirmed:
         cx, cy = CAM_X + u * sx, CAM_Y + v * sx
+        p = fr.p_uav.get(ident)
+        if p is None or p >= 0.6:
+            col, label = AQUA, (f"drone {p:.2f}" if p is not None else f"track {ident}")
+        elif p <= 0.4:
+            col, label = GREY, f"bird {1 - p:.2f}"
+        else:
+            col, label = INK2, "unknown"
         for a0, a1, b0, b1 in ((-24, -10, 0, 0), (10, 24, 0, 0), (0, 0, -24, -10), (0, 0, 10, 24)):
-            d.line([cx + a0, cy + b0, cx + a1, cy + b1], fill=AQUA, width=3)
-        d.text((cx + 28, cy - 28), f"track {ident}", fill=AQUA, font=sans(18, "Medium"))
-    if confirmed:
-        _, u, v = confirmed[0]
+            d.line([cx + a0, cy + b0, cx + a1, cy + b1], fill=col, width=3)
+        d.text((cx + 28, cy - 28), label, fill=col, font=sans(18, "Medium"))
+    drones = [c for c in confirmed if (fr.p_uav.get(c[0]) is None or fr.p_uav[c[0]] >= 0.6)]
+    if drones:
+        _, u, v = drones[0]
         half = 14
         x0 = int(np.clip(u - half, 0, cam_w - 2 * half))
         y0 = int(np.clip(v - half, 0, fr.image.shape[0] - 2 * half))
@@ -373,14 +451,39 @@ def _camera(fr: Frame, d: ImageDraw.ImageDraw, im: Image.Image, cam_w: int) -> N
     d.rectangle([CAM_X, CAM_Y + CAM_H - 34, CAM_X + CAM_W, CAM_Y + CAM_H], fill=(*BG,))
     d.text(
         (CAM_X + 12, CAM_Y + CAM_H - 30),
-        "onboard camera (simulated)  ·  orange: detection  ·  green: confirmed track",
+        "onboard camera (simulated)  ·  orange: detection  ·  green: drone  ·  grey: bird",
         fill=INK,
         font=sans(16),
     )
 
 
+def _speed_profile(res: RunResult, t_end: float) -> Callable[[float], float]:
+    """Playback speed over flight time: real time around the moments worth watching."""
+    ev = res.events
+    slow: list[tuple[float, float]] = []
+    t_int = next((e.t for e in ev if e.kind == "interrupt"), None)
+    if t_int is not None:
+        slow.append((t_int - 6.0, t_int + 10.0))
+    t_yield = next((e.t for e in ev if e.kind == "yield"), None)
+    if t_yield is not None:
+        slow.append((t_yield - 2.0, t_yield + 6.0))
+    cue_t = [res.log.t[i] for i, c in enumerate(res.log.cues) if len(c)]
+    if cue_t and (t_int is None or cue_t[0] < t_int - 8.0):
+        slow.append((cue_t[0] - 1.0, cue_t[0] + 5.0))
+    tracking = [(e.t, e.t + 60.0) for e in ev if e.kind == "interrupt"]
+
+    def speed(t: float) -> float:
+        if any(a <= t < b for a, b in slow):
+            return 1.0
+        if any(a <= t < b for a, b in tracking):
+            return 4.0
+        return 6.0
+
+    return speed
+
+
 def flight_frames(res: RunResult) -> Iterator[Image.Image]:
-    """Streamed, not listed: ~1,700 frames of 720p would not fit in memory."""
+    """Streamed, not listed: thousands of 720p frames would not fit in memory."""
     a = res.log.arrays()
     t_log = a["t"]
     frames = res.log.frames
@@ -391,63 +494,189 @@ def flight_frames(res: RunResult) -> Iterator[Image.Image]:
             ev[e.kind] = e.t
     t_end = float(t_log[-1])
     t_int = ev.get("interrupt", 30.0)
-    t_res = ev.get("resume", t_int + 60.0)
-    segs = [
-        Segment(0.0, t_int - 6.0, 5.0),
-        Segment(t_int - 6.0, t_int + 12.0, 1.0),
-        Segment(t_int + 12.0, t_res, 4.0),
-        Segment(t_res, t_end, 6.0),
-    ]
+    yields = _intervals(res, "yield", ("resume", "skip", "abort"))
+    speed = _speed_profile(res, t_end)
+    times = [0.0]
+    while times[-1] < t_end:
+        times.append(times[-1] + speed(times[-1]) / FPS)
     cam_w = res.config.camera.width
-    det_range = float(
-        np.linalg.norm(a["pos"][np.searchsorted(t_log, t_int)] - a["target"][np.searchsorted(t_log, t_int)])
-    )
-    counts = [int((seg.t1 - seg.t0) / seg.speed * FPS) for seg in segs]
-    total, idx = sum(counts), 0
-    for seg, n in zip(segs, counts, strict=True):
-        for i in range(n):
-            t = seg.t0 + i * seg.speed / FPS
-            k = min(int(np.searchsorted(t_log, t)), len(t_log) - 1)
-            j = max(0, int(np.searchsorted(ft, t, side="right")) - 1)
-            fr = frames[j]
-            im = blank()
-            d = ImageDraw.Draw(im)
-            beh = res.log.behaviour[k]
-            badge = "×1 real time" if seg.speed == 1.0 else f"×{seg.speed:.0f}"
-            bw = d.textlength(badge, font=sans(22, "SemiBold"))
-            cap = "4  " + _caption(beh, t, ev)
-            size = 26
-            while size > 16 and d.textlength(cap, font=sans(size, "SemiBold")) > W - 40 - bw - 60 - CAM_X:
-                size -= 1
-            d.text((CAM_X, 22 + (26 - size) // 2), cap, fill=INK, font=sans(size, "SemiBold"))
-            d.rounded_rectangle([W - 40 - bw - 24, 20, W - 40, 58], radius=8, fill=PANEL, outline=LINE)
+    k_int = min(int(np.searchsorted(t_log, t_int)), len(t_log) - 1)
+    det_range = float(np.linalg.norm(a["pos"][k_int] - a["target"][k_int]))
+    total = len(times)
+    for idx, t in enumerate(times, start=1):
+        k = min(int(np.searchsorted(t_log, t)), len(t_log) - 1)
+        j = max(0, int(np.searchsorted(ft, t, side="right")) - 1)
+        fr = frames[j]
+        im = blank()
+        d = ImageDraw.Draw(im)
+        beh = res.log.behaviour[k]
+        sp = speed(t)
+        badge = "×1 real time" if sp == 1.0 else f"×{sp:.0f}"
+        bw = d.textlength(badge, font=sans(22, "SemiBold"))
+        yielding = any(a0 <= t < a1 for a0, a1 in yields)
+        no_track = all(np.isnan(a["track"][max(0, k - 20) : k + 1, 0]))
+        cue_only = len(res.log.cues[k]) > 0 and no_track and t < t_int
+        cap = "4  " + _caption(beh, t, ev, yielding, cue_only)
+        size = 26
+        while size > 16 and d.textlength(cap, font=sans(size, "SemiBold")) > W - 40 - bw - 60 - CAM_X:
+            size -= 1
+        d.text((CAM_X, 22 + (26 - size) // 2), cap, fill=INK, font=sans(size, "SemiBold"))
+        d.rounded_rectangle([W - 40 - bw - 24, 20, W - 40, 58], radius=8, fill=PANEL, outline=LINE)
+        d.text((W - 40 - bw - 12, 26), badge, fill=ORANGE if sp == 1.0 else INK2, font=sans(22, "SemiBold"))
+        _camera(fr, d, im, cam_w)
+        im.paste(_draw_map(res, a, k, float(a["yaw"][k])), (MAP_X, MAP_Y))
+        d.text(
+            (MAP_X + 10, MAP_Y + 8),
+            "top-down · red ring: 12 m · purple: microphones, fix · grey: birds",
+            fill=INK2,
+            font=sans(14),
+        )
+        _hud(d, res, a, k)
+        if t_int <= t < t_int + 10:
             d.text(
-                (W - 40 - bw - 12, 26),
-                badge,
-                fill=ORANGE if seg.speed == 1.0 else INK2,
-                font=sans(22, "SemiBold"),
+                (CAM_X + 14, CAM_Y + 14),
+                f"first confirmed at {det_range:.0f} m",
+                fill=INK,
+                font=sans(20, "Medium"),
             )
-            _camera(fr, d, im, cam_w)
-            im.paste(_draw_map(res, a, k, float(a["yaw"][k])), (MAP_X, MAP_Y))
-            d.text(
-                (MAP_X + 10, MAP_Y + 8),
-                "top-down · red ring: 12 m minimum separation",
-                fill=INK2,
-                font=sans(15),
-            )
-            _hud(d, res, a, k)
-            if t_int <= t < t_int + 12:
-                d.text(
-                    (CAM_X + 14, CAM_Y + 14),
-                    f"first confirmed at {det_range:.0f} m",
-                    fill=INK,
-                    font=sans(20, "Medium"),
-                )
-            footer(
-                d, f"closed-loop simulation · t = {t:5.1f} s · physics 400 Hz, autonomy 20 Hz, camera 10 Hz"
-            )
-            idx += 1
-            yield fade(im, min(1.0, idx / 6, (total - idx + 1) / 9))
+        footer(d, f"closed-loop simulation · t = {t:5.1f} s · physics 400 Hz, autonomy 20 Hz, camera 10 Hz")
+        yield fade(im, min(1.0, idx / 6, (total - idx + 1) / 9))
+
+
+# --------------------------------------------------------------------------- birds
+
+
+def _bird_vs_drone() -> tuple[
+    list[np.ndarray], list[np.ndarray], list[float], list[float], list[float], list[float]
+]:
+    """A drone and a flapping bird approaching the camera, rendered and detected frame by frame."""
+    cfg = load_config(ROOT / "configs" / "default.yaml")
+    cam = Camera(cfg.camera, cfg.vehicle.camera_offset)
+    det = SkyTargetDetector(cam, cfg.detector)
+    obs = np.array([0.0, 0.0, 30.0])
+    pose = cam.pose(obs, np.array([1.0, 0.0, 0.0, 0.0]), cfg.camera.pitch_up_deg)
+    crops: dict[str, list[np.ndarray]] = {"drone": [], "bird": []}
+    flux: dict[str, list[float]] = {"drone": [], "bird": []}
+    prob: dict[str, list[float]] = {"drone": [], "bird": []}
+    for kind in ("drone", "bird"):
+        ren = SkyRenderer(cam, seed=21)
+        clf = FlickerClassifier()
+        p0, vel = obs + np.array([60.0, -4.0, 5.0]), np.array([-4.0, 0.0, 0.0])
+        for k in range(60):
+            t = 0.1 * k
+            pos = p0 + vel * t
+            if kind == "drone":
+                img = ren.render(pose, [(pos, 0.35, 0.3 * t)], cfg.camera.noise_sigma)
+            else:
+                ph = 2 * math.pi * 4.3 * t
+                b = BirdState(0, pos, vel, 0.7, 0.55 + 0.45 * math.cos(ph), 0.21 * math.sin(ph), True)
+                img = ren.render(pose, [], cfg.camera.noise_sigma, birds=[b])
+            uv = cam.project(pose, pos)
+            assert uv is not None
+            hits = [dd for dd in det.detect(img, pose) if math.hypot(dd.u - uv[0], dd.v - uv[1]) < 4]
+            if hits:
+                clf.add(t, hits[0].flux)
+            flux[kind].append(hits[0].flux if hits else float("nan"))
+            prob[kind].append(clf.p_uav())
+            u0 = int(np.clip(uv[0] - 12, 0, cam.width - 24))
+            v0 = int(np.clip(uv[1] - 12, 0, cam.height - 24))
+            crops[kind].append(img[v0 : v0 + 24, u0 : u0 + 24])
+    return crops["drone"], crops["bird"], flux["drone"], flux["bird"], prob["drone"], prob["bird"]
+
+
+def slide_birds() -> list[Image.Image]:
+    dc, bc, df, bf, dp, bp = _bird_vs_drone()
+    n = len(dc)
+    seconds = 13.0
+
+    def panel(im: Image.Image, d: ImageDraw.ImageDraw, x: int, title: str, crop: np.ndarray, fl: list[float],
+              pr: list[float], k: int) -> None:  # fmt: skip
+        d.text((x, 120), title, fill=INK, font=sans(26, "SemiBold"))
+        big = Image.fromarray(crop).resize((240, 240), Image.Resampling.NEAREST)
+        im.paste(big, (x, 160))
+        d.rectangle([x - 2, 158, x + 242, 402], outline=LINE, width=2)
+        d.text((x, 408), "×10 zoom: real rendered pixels", fill=MUTED, font=sans(15))
+        gx, gy, gw, gh = x + 270, 160, 300, 240
+        d.rectangle([gx, gy, gx + gw, gy + gh], fill=PANEL)
+        d.text((gx + 8, gy + 6), "blob darkness (flux), frame by frame", fill=MUTED, font=sans(15))
+        vals = np.array(fl[: k + 1])
+        top = max(np.nanmax(np.array(df + bf)), 1.0)
+        pts = [(gx + gw * i / (n - 1), gy + gh - gh * 0.9 * v / top) for i, v in enumerate(vals) if v == v]
+        if len(pts) > 1:
+            d.line(pts, fill=BLUE, width=3)
+        p = pr[k]
+        if p >= 0.6:
+            col, txt = AQUA, f"drone  p = {p:.2f}"
+        elif p <= 0.4:
+            col, txt = GREY, f"bird  p(drone) = {p:.2f}"
+        else:
+            col, txt = INK2, "unknown: gathering evidence"
+        d.text((x, 440), txt, fill=col, font=sans(28, "SemiBold"))
+
+    frames = []
+    for i in range(int(seconds * FPS)):
+        k = min(int(i / (seconds * FPS - 45) * (n - 1)), n - 1)
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((60, 50), "5  Bird or drone? Watch the wing-beat", fill=BLUE, font=sans(26, "SemiBold"))
+        panel(im, d, 60, "quadcopter, 0.35 m", dc[k], df, dp, k)
+        panel(im, d, 660, "flapping bird, 0.7 m", bc[k], bf, bp, k)
+        for j, line in enumerate(
+            [
+                "Spinning props blur into steady discs; a flapping wing makes the blob flicker frame to frame.",
+                "The classifier scores that flicker against sensor noise. Birds are still kept clear of, just not",
+                "reported as drones. A gliding bird has no wing-beat to see, and is the case this cannot catch.",
+            ]
+        ):
+            d.text((60, 520 + 32 * j), line, fill=INK2, font=sans(21))
+        footer(d, f"approaching from 60 m at 4 m/s, 10 Hz camera · t = {0.1 * k:3.1f} s")
+        frames.append(im)
+    return list(faded(frames))
+
+
+# --------------------------------------------------------------------------- SAPIENT
+
+
+def slide_sapient(messages: list[dict[str, object]]) -> list[Image.Image]:
+    det = next(m for m in messages if "detection_report" in m and "classification" in m["detection_report"])  # type: ignore[operator]
+    shown_msg = json.loads(json.dumps(det))
+    shown_msg["detection_report"].pop("track_info", None)
+    text = json.dumps(shown_msg, indent=2)
+    lines = text.splitlines()
+    f = mono(14)
+    counts: dict[str, int] = {}
+    for m in messages:
+        key = next(k for k in m if k not in ("timestamp", "node_id"))
+        counts[key] = counts.get(key, 0) + 1
+
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((60, 50), "6  Speaking NATO's sensor language: SAPIENT", fill=BLUE, font=sans(26, "SemiBold"))
+        d.rounded_rectangle([60, 100, 660, 680], radius=10, fill=PANEL, outline=LINE)
+        shown = int(t * 14) + 1
+        for i, line in enumerate(lines[: min(shown, 37)]):
+            d.text((76, 112 + 15.5 * i), line[:74], fill=INK, font=f)
+        x = 700
+        paras = [
+            ("SAPIENT (UK Dstl, BSI Flex 335) is the message set NATO uses to plug counter-drone sensors "
+             "from different nations into one fusion node; trialled at NATO's interoperability exercise.", INK),
+            ("Kestrel registers two nodes, the airborne camera and the ground microphones, and reports in "
+             f"ICD v7: {counts.get('detection_report', 0)} detection and {counts.get('status_report', 0)} status "
+             "reports in this flight, UTM coordinates with one-sigma errors.", INK),
+            ("Not yet done: protobuf wire encoding (Dstl issues the .proto files on request) and a "
+             "conformance test against a SAPIENT fusion node.", INK2),
+        ]  # fmt: skip
+        y = 112
+        for text_, col in paras:
+            for line in wrap(d, text_, sans(20), W - x - 50):
+                d.text((x, y), line, fill=col, font=sans(20))
+                y += 30
+            y += 22
+        footer(d, "One detection report from the flight above · details in docs/interop.md")
+        return im
+
+    return list(faded(hold(r, 11.0)))
 
 
 # --------------------------------------------------------------------------- SITL
@@ -493,7 +722,7 @@ def slide_sitl(path: Path) -> list[Image.Image]:
         im = blank()
         d = ImageDraw.Draw(im)
         d.text(
-            (40, 22), "5  The same autonomy code flies a real autopilot", fill=INK, font=sans(26, "SemiBold")
+            (40, 22), "7  The same autonomy code flies a real autopilot", fill=INK, font=sans(26, "SemiBold")
         )
         d.text(
             (40, 60),
@@ -545,67 +774,122 @@ def slide_sitl(path: Path) -> list[Image.Image]:
 # --------------------------------------------------------------------------- results and notes
 
 
-def slide_results(summary: dict[str, object], rows: list[dict[str, str]]) -> list[Image.Image]:
-    s = summary
-    sep = s["min_separation_m"]
-    err = s["track_error_median_m"]
-    assert isinstance(sep, dict) and isinstance(err, dict)
-    longest = max(float(r["time_below_min_separation_s"] or 0) for r in rows)
-    tiles = [
-        (f"{s['completed_and_landed']}/{s['runs']}", "missions completed and landed"),
-        (f"{s['runs_with_contact_tracked']}/{s['runs']}", "contacts detected and shadowed"),
-        (f"{err['median']:.1f} m", "median track error at ~30 m"),
-        (f"{100 * float(s['target_in_fov_fraction_median']):.0f}%", "intruder in view while shadowing"),  # type: ignore[arg-type]
+def slide_results(matrix: dict[str, Any]) -> list[Image.Image]:
+    sets = matrix["sets"]
+    cols = [
+        ("configuration", 96),
+        ("runs inside 12 m", 420),
+        ("closest", 580),
+        ("detected 3 s before 30 m", 700),
+        ("false alarms / h", 940),
+        ("missions done", 1090),
     ]
+
+    def row(sm: dict[str, Any]) -> list[str]:
+        sep = sm["min_separation_m"]
+        return [
+            f"{sm['separation_violations']}/{sm['runs']}",
+            f"{sep['min']:.1f} m",
+            f"{sm['encounters_detected']}/{sm['encounters']}",
+            f"{sm['false_alarms_per_flight_hour']:.1f}",
+            f"{sm['completed_and_landed']}/{sm['runs']}",
+        ]
 
     def r(t: float) -> Image.Image:
         im = blank()
         d = ImageDraw.Draw(im)
-        d.text((96, 70), "6  Measured over 24 randomised encounters", fill=BLUE, font=sans(26, "SemiBold"))
+        d.text((96, 50), "8  Measured, with a baseline", fill=BLUE, font=sans(26, "SemiBold"))
         d.text(
-            (96, 110),
-            "intruder pattern and speed (2-6 m/s), altitude, position, wind 0-5 m/s, a different sky each run",
+            (96, 88),
+            f"the same {matrix['runs']} randomised encounters (fresh seeds {matrix['seed0']}+, never used for tuning) "
+            "flown in each configuration",
             fill=MUTED,
-            font=sans(20),
+            font=sans(19),
         )
-        for i, (big, small) in enumerate(tiles):
-            if t < 0.3 * i:
+        y = 140
+        for name, x in cols:
+            d.text((x, y), name, fill=MUTED, font=sans(17))
+        y += 34
+        for i, st in enumerate(sets):
+            if t < 0.35 * i:
                 continue
-            x = 96 + i * 280
-            d.rounded_rectangle([x, 170, x + 260, 330], radius=12, fill=PANEL, outline=LINE)
-            d.text((x + 20, 190), big, fill=INK, font=sans(54, "Bold"))
-            for j, line in enumerate(wrap(d, small, sans(19), 220)):
-                d.text((x + 20, 268 + 24 * j), line, fill=INK2, font=sans(19))
-        if t > 1.6:
-            d.rounded_rectangle([96, 370, W - 96, 500], radius=12, fill=PANEL, outline=ORANGE)
-            d.text(
-                (120, 390),
-                f"{s['separation_violations']}/{s['runs']} runs briefly went inside the 12 m minimum separation",
-                fill=ORANGE,
-                font=sans(28, "SemiBold"),
-            )
-            d.text(
-                (120, 436),
-                f"at most {longest:.1f} s each, closest {sep['min']:.1f} m. Published as-is and the next thing to fix,",
-                fill=INK2,
-                font=sans(21),
-            )
-            d.text(
-                (120, 464),
-                "not tuned away. Causes and fixes so far: docs/decisions/0004-separation.md",
-                fill=INK2,
-                font=sans(21),
-            )
-        d.text(
-            (96, 540),
-            "A test fails CI if the README's numbers drift from the committed results.",
-            fill=MUTED,
-            font=sans(20),
-        )
-        footer(d)
+            base = st["key"].endswith("baseline")
+            d.line([(96, y - 6), (W - 60, y - 6)], fill=LINE, width=1)
+            d.text((96, y), st["label"], fill=INK2 if base else INK, font=sans(19, "Medium"))
+            for (_, x), v in zip(cols[1:], row(st["summary"]), strict=True):
+                d.text((x, y), v, fill=INK2 if base else INK, font=mono(19))
+            y += 40
+        if t > 0.35 * len(sets):
+            rr = matrix.get("risk_ratio")
+            if rr is not None:
+                d.rounded_rectangle([96, y + 14, W - 96, y + 94], radius=12, fill=PANEL, outline=AQUA)
+                d.text(
+                    (120, y + 28),
+                    f"risk ratio {rr:.2f}: avoidance cut runs losing well clear from "
+                    f"{matrix['risk_ratio_from']} to {matrix['risk_ratio_to']} of {matrix['runs']}",
+                    fill=AQUA,
+                    font=sans(25, "SemiBold"),
+                )
+                rr2 = matrix.get("risk_ratio_two")
+                d.text(
+                    (120, y + 62),
+                    f"Two intruders: {rr2:.2f}, because one camera cannot watch both (decision 0013). "
+                    "All numbers: kestrel bench; CI checks them.",
+                    fill=INK2,
+                    font=sans(18),
+                )
+        footer(d, "12 m well clear is Kestrel's own: no standard exists for drone-to-drone encounters")
         return im
 
-    return list(faded(hold(r, 9.5)))
+    return list(faded(hold(r, 16.0)))
+
+
+STANDARDS = [
+    (
+        "Amazon Prime Air AOT benchmark",
+        "3 s track before closest range; false alarms per flight hour",
+        "measured",
+    ),
+    (
+        "Detect-and-avoid practice (ASTM F3442, MIT LL)",
+        "loss of well clear; risk ratio against no avoidance",
+        "measured",
+    ),
+    (
+        "US Army CALL, acoustic detection in Ukraine",
+        "2° bearings, cueing layer, altitude unknown",
+        "implemented",
+    ),
+    ("SAPIENT ICD v7 (NATO C-UAS)", "registration, status and detection reports", "implemented"),
+    ("ECFR and allied studies: birds", "bird false alarms counted, flicker classifier", "implemented"),
+    ("ArduPilot", "same autonomy code flies ArduCopter SITL in CI", "implemented"),
+    ("Real flight, real footage, certification", "not done; the next step", "not claimed"),
+]
+
+
+def slide_standards() -> list[Image.Image]:
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text(
+            (96, 60),
+            "9  Held against published standards and field reports",
+            fill=BLUE,
+            font=sans(26, "SemiBold"),
+        )
+        for i, (src, what, status) in enumerate(STANDARDS):
+            if t < 0.4 * i:
+                continue
+            y = 130 + 72 * i
+            col = {"measured": BLUE, "implemented": AQUA, "not claimed": ORANGE}[status]
+            d.rounded_rectangle([96, y, 260, y + 40], radius=8, outline=col, width=2)
+            d.text((110, y + 8), status, fill=col, font=sans(18, "SemiBold"))
+            d.text((290, y - 2), src, fill=INK, font=sans(22, "Medium"))
+            d.text((290, y + 28), what, fill=INK2, font=sans(18))
+        footer(d, "Row by row with sources: docs/research.md")
+        return im
+
+    return list(faded(hold(r, 11.0)))
 
 
 NOTES = [
@@ -617,9 +901,22 @@ NOTES = [
         "A 180° heading turn started a roll/pitch limit cycle and the drone fell",
         "yaw slew limit + mixer priority: 47.6° → 3.6° tilt",
     ),
-    ("13.8 m/s flown against an 8 m/s limit", "cascaded, speed-saturated position loop"),
-    ("Four distinct separation failures", "range floor, stopping distance, reachable set, escape velocity"),
-    ("SITL armed and disarmed in a loop", "MAVLink ids taken from the heartbeat; arm() waits for armed"),
+    (
+        "Separation failures, one cause at a time",
+        "range floor, stopping distance, reachable set, yield, keep-clear",
+    ),
+    (
+        "The renderer drew sub-pixel parts too big: drones looked detectable too far out",
+        "area-true drawing; every benchmark re-run on the corrected sky",
+    ),
+    (
+        "Acoustic cues made the drone give way to aircraft the camera already had",
+        "a cue explained by a visual track is dropped; giving way has a time budget",
+    ),
+    (
+        "The camera kept staring at where an intruder had been a minute earlier",
+        "watch a stale contact for 15 s, then look where you are going: 3/24 → 1/24 runs inside 12 m",
+    ),
 ]
 
 
@@ -628,18 +925,45 @@ def slide_notes() -> list[Image.Image]:
         im = blank()
         d = ImageDraw.Draw(im)
         d.text(
-            (96, 70), "7  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
+            (96, 70), "10  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
         )
         for i, (prob, fix) in enumerate(NOTES):
             if t < 0.5 * i:
                 continue
-            y = 140 + 92 * i
-            d.text((96, y), prob, fill=INK, font=sans(24, "Medium"))
-            d.text((126, y + 36), "→  " + fix, fill=AQUA, font=sans(21))
+            y = 136 + 84 * i
+            d.text((96, y), prob, fill=INK, font=sans(23, "Medium"))
+            d.text((126, y + 34), "→  " + fix, fill=AQUA, font=sans(20))
         footer(d, "Each is a decision record with before/after measurements in docs/decisions/")
         return im
 
     return list(faded(hold(r, 9.0)))
+
+
+def slide_next() -> list[Image.Image]:
+    rows = [
+        ("Not yet", "flown on a real airframe; tested on real air-to-air footage; certified for anything"),
+        (
+            "Next",
+            "detector evaluation on public real footage (AOT), then flights with a cooperating target drone",
+        ),
+        ("Wanted", "university labs and UAS teams with a test range, a target drone or real sensor data"),
+    ]
+
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((96, 120), "11  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
+        for i, (k, v) in enumerate(rows):
+            if t < 0.6 * i:
+                continue
+            y = 200 + 110 * i
+            d.text((96, y), k, fill=ORANGE if i == 0 else AQUA, font=sans(30, "Bold"))
+            for j, line in enumerate(wrap(d, v, sans(26), W - 400)):
+                d.text((300, y + 2 + 34 * j), line, fill=INK, font=sans(26))
+        footer(d)
+        return im
+
+    return list(faded(hold(r, 8.0)))
 
 
 def slide_outro() -> list[Image.Image]:
@@ -669,13 +993,16 @@ def main() -> None:
     args = ap.parse_args()
     cfg_path = ROOT / "configs" / "default.yaml"
     scen_path = ROOT / "scenarios" / "airfield.yaml"
+    demo_cfg = load_config(ROOT / "configs" / "full.yaml")
+    demo_scen = load_scenario(ROOT / "scenarios" / "airfield_birds.yaml")
     print("simulating the demo flight ...", flush=True)
-    res = run(
-        INSTRUCTION, load_config(cfg_path), load_scenario(scen_path), record_every=1, record_downsample=1
+    sapient = SapientExporter(
+        SapientOptions(
+            origin_lla=demo_scen.world.origin_lla, altitude_band_m=(0.0, demo_cfg.safety.max_altitude)
+        )
     )
-    summary = json.loads((ROOT / "docs" / "results" / "bench_summary.json").read_text(encoding="utf-8"))
-    with open(ROOT / "docs" / "results" / "bench_results.csv", encoding="utf-8") as fh:
-        rows = list(csv.DictReader(fh))
+    res = run(INSTRUCTION, demo_cfg, demo_scen, record_every=1, record_downsample=1, sapient=sapient)
+    matrix = json.loads((ROOT / "docs" / "results" / "matrix.json").read_text(encoding="utf-8"))
     writer = imageio.get_writer(
         args.out,
         fps=FPS,
@@ -685,13 +1012,18 @@ def main() -> None:
     )
     parts: list[tuple[str, Callable[[], Iterable[Image.Image]]]] = [
         ("title", slide_title),
+        ("context", slide_context),
         ("instruction", slide_instruction),
         ("plan", lambda: slide_plan(cfg_path, scen_path)),
         ("rejected", lambda: slide_rejected(cfg_path, scen_path)),
         ("flight", lambda: flight_frames(res)),
+        ("birds", slide_birds),
+        ("sapient", lambda: slide_sapient(sapient.messages)),
         ("sitl", lambda: slide_sitl(ROOT / "docs" / "results" / "sitl_flight.json")),
-        ("results", lambda: slide_results(summary, rows)),
+        ("results", lambda: slide_results(matrix)),
+        ("standards", slide_standards),
         ("notes", slide_notes),
+        ("next", slide_next),
         ("outro", slide_outro),
     ]
     total = 0

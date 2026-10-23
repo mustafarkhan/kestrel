@@ -7,8 +7,11 @@ pixels wide (where CNN detectors are weakest):
 2. morphological *black top-hat* (grey closing minus image), which keeps dark
    blobs smaller than the structuring element and removes smooth sky and large
    cloud structures;
-3. a horizon mask from the camera attitude, because below-horizon clutter is a
-   different (and much harder) problem that this detector does not claim to solve;
+3. a horizon mask from the camera attitude. It reaches 1 deg below the true horizon,
+   so same-altitude traffic (the collision-course case, sitting on the horizon) is
+   searched; the background there is haze at kilometre range. Clutter further down
+   (treelines, buildings) is a different and much harder problem this detector
+   does not claim to solve;
 4. a robust z-score threshold (median / MAD), so the threshold adapts to how
    cluttered the current sky is;
 5. connected components with area, aspect and minimum-contrast gates;
@@ -41,6 +44,7 @@ class Detection:
     size_px: float  # blur-corrected apparent diameter
     score: float  # peak robust z-score
     bbox: tuple[int, int, int, int]  # x0, y0, x1, y1 (inclusive-exclusive)
+    flux: float = 0.0  # integrated top-hat response: silhouette area times contrast
 
 
 def to_gray(rgb: np.ndarray) -> np.ndarray:
@@ -117,6 +121,7 @@ class SkyTargetDetector:
                     size_px=size_px,
                     score=float(z[sl][region].max()),
                     bbox=(sl[1].start, sl[0].start, sl[1].stop, sl[0].stop),
+                    flux=float(wts.sum()),
                 )
             )
         out.sort(key=lambda d: -d.score)

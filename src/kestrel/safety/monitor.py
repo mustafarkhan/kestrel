@@ -60,8 +60,11 @@ class SafetyDecision:
 
 
 class SafetyMonitor:
-    def __init__(self, limits: SafetyLimits, vehicle: VehicleParams, world: WorldConfig) -> None:
+    def __init__(
+        self, limits: SafetyLimits, vehicle: VehicleParams, world: WorldConfig, separation: bool = True
+    ) -> None:
         self.lim = limits
+        self.separation = separation  # False only for the unmitigated benchmark baseline
         self.fence = Geofence(world.fence)
         self.home = np.array(world.home, dtype=float)
         self.energy = EnergyModel(vehicle, limits)
@@ -116,7 +119,7 @@ class SafetyMonitor:
             self.counts[tag] += 1
 
         # separation from every confirmed track (first, so the fence has the final word)
-        for tr in tracks:
+        for tr in tracks if self.separation else []:
             # Monocular range comes from an assumed target size, so it is never better than
             # ``range_uncertainty_floor`` of the range however confident the filter claims to be.
             rng = float(np.linalg.norm(tr.pos - st.pos))
@@ -133,10 +136,21 @@ class SafetyMonitor:
             d = pos - tr.pos
             dist = float(np.linalg.norm(d))
             if dist < need:
-                away = st.pos - tr.pos
-                n = d / dist if dist > 1e-6 else away / max(float(np.linalg.norm(away)), 1e-6)
-                pos = tr.pos + n * need
-                note("separation_push")
+                # Push horizontally and keep altitude: a multirotor has about 3x more horizontal
+                # than vertical speed authority, so moving along the 3-D line (downwards when
+                # the intruder is above) escapes on the weakest axis.
+                dz = float(d[2])
+                h_need = math.sqrt(max(need * need - dz * dz, 0.0))
+                hd = math.hypot(float(d[0]), float(d[1]))
+                if hd < h_need:
+                    if hd > 0.5:
+                        u_h = np.array([d[0], d[1], 0.0]) / hd
+                    else:
+                        away = st.pos - tr.pos
+                        ah = math.hypot(float(away[0]), float(away[1]))
+                        u_h = np.array([away[0], away[1], 0.0]) / ah if ah > 0.5 else np.array([1.0, 0, 0])
+                    pos = np.array([tr.pos[0], tr.pos[1], pos[2]]) + u_h * h_need
+                    note("separation_push")
             rel = st.pos - tr.pos
             rd = float(np.linalg.norm(rel))
             if rd < need and rd > 1e-6:
@@ -147,7 +161,7 @@ class SafetyMonitor:
                 # than vertical speed authority.
                 h = float(np.hypot(rel[0], rel[1]))
                 u = np.array([rel[0] / h, rel[1] / h, 0.0]) if h > 2.0 else rel / rd
-                required = max(float(tr.vel @ u), 0.0) + 1.0 + 0.5 * (need - rd)
+                required = max(float(tr.vel @ u), 0.0) + 2.0 + 1.0 * (need - rd)
                 outward = float(vel @ u)
                 if outward < required:
                     vel = vel + (required - outward) * u
