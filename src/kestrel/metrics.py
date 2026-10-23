@@ -11,6 +11,12 @@ Definitions follow the detect-and-avoid literature, scaled to small-drone encoun
 * **Birds**: a confirmed track on a bird is a false alarm only if it is *reported as a
   drone* (with the classifier off, every track is). Bird tracks are matched by bearing,
   since a bird's range estimated from an assumed drone size is wrong by the size ratio.
+* **Cue to track** and **cue to confirm**: from the first ground-sensor report reaching
+  the observer to the first track on an intruder with 8 or more detections (not called a
+  bird), and to the first such track reported as a drone. The figures a commander cares
+  about: how long from "something was heard" to "an aircraft is here", and to "it is a
+  drone". Entry-to-track and entry-to-confirm measure the same from the intruder crossing
+  the geofence, for configurations without ground sensors.
 * **Loss of well clear (LoWC)**: an entry into the ``min_separation`` sphere (12 m).
   ASTM F3442's well-clear volume (610 m x 77 m) is defined for manned traffic; no
   standard exists for drone-to-drone well clear, so Kestrel states its own. Separation
@@ -120,6 +126,36 @@ def compute_metrics(r: RunResult) -> dict[str, Any]:
                 range_mean_m=round(float(rng.mean()), 1),
                 range_min_m=round(float(rng.min()), 1),
             )
+    if r.first_cue_t is not None:
+        m["cue_t_s"] = round(r.first_cue_t, 2)
+        if r.first_track_t is not None:
+            m["cue_to_track_s"] = round(r.first_track_t - r.first_cue_t, 2)
+        if r.first_confirm_t is not None:
+            # negative when the camera had it before any ground sensor did
+            m["cue_to_confirm_s"] = round(r.first_confirm_t - r.first_cue_t, 2)
+    if r.first_track_t is not None and r.first_entry_t is not None:
+        m["entry_to_track_s"] = round(r.first_track_t - r.first_entry_t, 2)
+    if r.first_confirm_t is not None:
+        m["confirm_t_s"] = round(r.first_confirm_t, 2)
+        if r.first_entry_t is not None:
+            m["entry_to_confirm_s"] = round(r.first_confirm_t - r.first_entry_t, 2)
+    if r.scenario.link_loss and len(a["on_intruder"]):
+        dt = float(np.median(np.diff(t))) if len(t) > 1 else 0.05
+        jammed = np.zeros(len(t), dtype=bool)
+        for ev in r.scenario.link_loss:
+            jammed |= (t >= ev.start_s) & (t < ev.start_s + ev.duration_s)
+        m["jammed_s"] = round(float(jammed.sum() * dt), 1)
+        m["observed_while_jammed_s"] = round(float((jammed & a["on_intruder"]).sum() * dt), 1)
+    m["observers"] = r.observers
+    if r.team_min_separation_m is not None:
+        m["team_min_separation_m"] = round(r.team_min_separation_m, 2)
+    if r.track_errors:
+        e = np.array(r.track_errors)
+        m["track_error_all_median_m"] = round(float(np.median(e)), 2)
+        m["track_error_all_p90_m"] = round(float(np.percentile(e, 90)), 2)
+    m["investigations"] = sum(1 for e in r.events if e.kind == "investigate")
+    m["investigations_confirmed"] = sum(1 for e in r.events if e.kind == "confirmed")
+    m["reports_buffered"] = r.reports_buffered
     m["yields"] = sum(1 for e in r.events if e.kind == "yield")
     m["returned_for_traffic"] = any(e.kind == "abort" and "traffic" in e.detail for e in r.events)
     m["events"] = [f"{e.t:.1f}s {e.kind}: {e.detail}" for e in r.events if e.kind != "contact"]

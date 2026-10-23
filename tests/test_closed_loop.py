@@ -72,3 +72,80 @@ def test_detect_track_and_keep_separation(cfg: Config, airfield: Scenario) -> No
     assert m["target_in_fov_fraction"] > 0.8, m
     assert m["track_error_median_m"] < 8.0, m
     assert res.landed
+
+
+def _orbiting_intruder(sc: Scenario, **kw: object) -> Scenario:
+    intruder = IntruderConfig(pattern="orbit", center=(35, 85, 30), size=(20, 20), speed=3.0)
+    return sc.model_copy(update={"intruders": [intruder], **kw})
+
+
+STANDBY = (
+    "take off to 25 m, stand by at the hangar for 2 minutes and investigate any acoustic cues, "
+    "then return home"
+)
+STANDBY_FOLLOW = (
+    "take off to 25 m, stand by at the hangar for 2 minutes and investigate any acoustic cues, "
+    "and if you see a drone, follow it from 30 m for 60 seconds, then return home"
+)
+
+
+def test_acoustic_cue_is_investigated_and_confirmed(cfg: Config, airfield: Scenario) -> None:
+    acoustic = cfg.model_copy(update={"acoustic": cfg.acoustic.model_copy(update={"enabled": True})})
+    res = run(STANDBY, acoustic, _orbiting_intruder(airfield, max_duration_s=260.0))
+    m = compute_metrics(res)
+    kinds = [e.kind for e in res.events]
+    assert "investigate" in kinds and "confirmed" in kinds, m["events"]
+    assert m["cue_to_confirm_s"] is not None and m["cue_to_confirm_s"] < 60.0, m
+    assert m["min_separation_m"] >= cfg.safety.min_separation, m
+    assert res.landed
+
+
+def test_jammed_sensor_node_keeps_working_and_reports_late(cfg: Config, airfield: Scenario) -> None:
+    from kestrel.interop.sapient import SapientExporter, SapientOptions
+
+    safety = cfg.safety.model_copy(update={"link_loss_action": "continue"})
+    c = cfg.model_copy(
+        update={"safety": safety, "acoustic": cfg.acoustic.model_copy(update={"enabled": True})}
+    )
+    sc = _orbiting_intruder(
+        airfield, max_duration_s=260.0, link_loss=[LinkLossEvent(start_s=40.0, duration_s=50.0)]
+    )
+    sapient = SapientExporter(SapientOptions(origin_lla=sc.world.origin_lla))
+    res = run(STANDBY_FOLLOW, c, sc, sapient=sapient)
+    m = compute_metrics(res)
+    assert not any(e.kind == "abort" for e in res.events), m["events"]
+    assert res.reports_buffered > 0
+    assert m["observed_while_jammed_s"] > 10.0, m
+    assert res.landed and m["min_separation_m"] >= cfg.safety.min_separation, m
+
+
+def test_two_observers_triangulate_and_keep_apart(cfg: Config, airfield: Scenario) -> None:
+    from kestrel.team import run_team
+
+    sc = _orbiting_intruder(airfield, max_duration_s=300.0)
+    mission = "take off to 25 m, survey the north field at 25 m with 30 m spacing, then return home"
+    res = run_team(mission, cfg, sc, 2)
+    alone = compute_metrics(run(mission, cfg, sc))
+    m = compute_metrics(res)
+    assert res.completed and res.landed, m["events"]
+    assert m["team_min_separation_m"] >= cfg.safety.min_separation, m
+    assert m["min_separation_m"] >= cfg.safety.min_separation, m
+    # two lines of sight fix range far better than one camera's size-based guess
+    assert m["track_error_all_median_m"] < 0.8 * alone["track_error_all_median_m"], (m, alone)
+
+
+def test_two_observers_do_not_both_follow_one_drone(cfg: Config, airfield: Scenario) -> None:
+    from kestrel.team import run_team
+
+    sc = _orbiting_intruder(airfield, max_duration_s=200.0)
+    res = run_team(
+        "take off to 25 m, stand by at the hangar for 90 seconds, and if you see a drone, "
+        "follow it from 30 m for 40 seconds, then return home",
+        cfg,
+        sc,
+        2,
+    )
+    followers = {e.detail.split("]")[0] for e in res.events if e.kind == "interrupt"}
+    targets = [e.detail.rsplit("track ", 1)[1] for e in res.events if e.kind == "interrupt"]
+    assert len(targets) == len(set(targets)), [e.detail for e in res.events if e.kind == "interrupt"]
+    assert followers, "nobody followed the drone"

@@ -25,6 +25,8 @@ _GROUND_A = np.array([70.0, 88.0, 52.0])
 _GROUND_B = np.array([104.0, 96.0, 70.0])
 _TARGET = np.array([42.0, 42.0, 46.0])
 _BIRD = np.array([52.0, 46.0, 40.0])
+_SEA_A = np.array([28.0, 52.0, 70.0])
+_SEA_B = np.array([46.0, 74.0, 92.0])
 R_MIN_PX = 0.35  # smallest disc the 4x supersampling grid draws reliably
 
 
@@ -47,8 +49,11 @@ def _fractal_noise(rng: np.random.Generator, shape: tuple[int, int], beta: float
 
 
 class SkyRenderer:
-    def __init__(self, camera: Camera, seed: int = 0, cloud_cover: float = 0.35) -> None:
+    def __init__(
+        self, camera: Camera, seed: int = 0, cloud_cover: float = 0.35, surface: str = "land"
+    ) -> None:
         self.cam = camera
+        self.surface = surface
         rng = np.random.default_rng(seed + 1000)
         # equirectangular cloud map: azimuth [-pi, pi) x elevation [0, pi/2]
         self.cloud_map = _fractal_noise(rng, (256, 1024))
@@ -107,8 +112,20 @@ class SkyRenderer:
             gy = pose.position[1] + d[..., 1] * rng_g
             ti = (gx * 2.0).astype(np.int64) % 512
             tj = (gy * 2.0).astype(np.int64) % 512
-            tex = np.clip(0.5 + 0.25 * self.ground_tex[ti, tj], 0.0, 1.0).astype(np.float32)[..., None]
-            col = _GROUND_A.astype(np.float32) + (_GROUND_B - _GROUND_A).astype(np.float32) * tex
+            if self.surface == "sea":
+                # Waves: the same fractal texture, finer, stretched along one direction; sun glint
+                # as sparse bright specks. Brighter-than-water clutter, below the horizon.
+                ti = (gx * 6.0).astype(np.int64) % 512
+                tj = (gy * 2.0).astype(np.int64) % 512
+                tex = np.clip(0.5 + 0.3 * self.ground_tex[ti, tj], 0.0, 1.0).astype(np.float32)[..., None]
+                col = _SEA_A.astype(np.float32) + (_SEA_B - _SEA_A).astype(np.float32) * tex
+                gi = (gx * 23.0 + gy * 7.0).astype(np.int64) % 512
+                gj = (gy * 19.0 - gx * 5.0).astype(np.int64) % 512
+                glint = (self.ground_tex[gi, gj] > 2.4) & (rng_g < 400.0)
+                col = np.where(glint[..., None], col + np.float32(90.0), col)
+            else:
+                tex = np.clip(0.5 + 0.25 * self.ground_tex[ti, tj], 0.0, 1.0).astype(np.float32)[..., None]
+                col = _GROUND_A.astype(np.float32) + (_GROUND_B - _GROUND_A).astype(np.float32) * tex
             haze = np.clip(rng_g / 1500.0, 0.0, 0.85).astype(np.float32)[..., None]
             col = col + (_SKY_HORIZON.astype(np.float32) - col) * haze
             img = np.where(sky[..., None], img, col)

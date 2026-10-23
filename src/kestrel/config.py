@@ -174,6 +174,7 @@ class WorldConfig(_Strict):
     # Geodetic position (lat deg, lon deg, alt m above the geoid) of the local ENU origin, used
     # for reports to other systems. Default: ArduPilot SITL's default home.
     origin_lla: XYZ = (-35.363261, 149.165230, 584.0)
+    surface: Literal["land", "sea"] = "land"  # what lies below the horizon in the camera
     sites: dict[str, Site] = Field(default_factory=dict)
     wind: WindParams = WindParams()
 
@@ -203,6 +204,12 @@ class SafetyLimits(_Strict):
     traffic_contingency_fraction: float = 1.0  # extra plan energy held for traffic delays
     rtl_speed: float = 6.0
     link_loss_timeout_s: float = 5.0
+    # What a lost ground link means. "rtl": return home after link_loss_timeout_s (the civil
+    # default). "continue": keep flying the mission autonomously for up to link_loss_autonomy_s,
+    # buffering reports, because in counter-UAS work the link is jammed exactly when the
+    # sensor is needed; separation, geofence and energy limits are enforced on board either way.
+    link_loss_action: Literal["rtl", "continue"] = "rtl"
+    link_loss_autonomy_s: float = 120.0
     land_speed: float = 0.8
 
 

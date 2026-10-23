@@ -51,7 +51,7 @@ from typing import Any
 import numpy as np
 
 from kestrel.geometry import Vec
-from kestrel.interop.utm import enu_to_lla, to_utm, zone_of
+from kestrel.interop.utm import enu_to_lla, from_utm, lla_to_enu, to_utm, zone_of
 from kestrel.perception.acoustic import AcousticFix
 from kestrel.perception.tracker import TrackEstimate
 
@@ -108,6 +108,9 @@ class SapientExporter:
     messages: list[Message] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        self.link_ok = True
+        self.backlog: list[Message] = []
+        self.late_deliveries = 0
         self._rng = np.random.default_rng(self.opts.seed)
         lat, lon, _ = self.opts.origin_lla
         self.zone = zone_of(lat, lon)
@@ -126,9 +129,29 @@ class SapientExporter:
 
     def _emit(self, t: float, node: _Node, content_key: str, content: Message) -> None:
         msg = {"timestamp": rfc3339(self.opts.epoch_s + t), "node_id": node.node_id, content_key: content}
+        if not self.link_ok:
+            # Store and forward: while the link is down, reports keep their measurement time and
+            # wait. Only the latest status report per node is worth sending late.
+            if content_key == "status_report":
+                self.backlog = [
+                    m for m in self.backlog if not ("status_report" in m and m["node_id"] == node.node_id)
+                ]
+            self.backlog.append(msg)
+            return
+        self._deliver(msg)
+
+    def _deliver(self, msg: Message) -> None:
         self.messages.append(msg)
         if self.sink is not None:
             self.sink(msg)
+
+    def set_link(self, t: float, ok: bool) -> None:
+        if ok and not self.link_ok:
+            for m in self.backlog:
+                self._deliver(m)
+            self.late_deliveries += len(self.backlog)
+            self.backlog = []
+        self.link_ok = ok
 
     def location(self, enu: Vec, sigma: Vec | None = None) -> Message:
         """A SAPIENT ``Location`` (UTM_M, WGS84_G) for a point in the local ENU frame."""
@@ -153,6 +176,63 @@ class SapientExporter:
             "zone": self.zone,
         }
 
+    def _look_at_definition(self) -> Message:
+        """The camera node accepts LOOK_AT tasks over an area of interest (ICD 5.6, 5.6.8-9)."""
+        return {
+            "region_definition": {
+                "region_type": ["REGION_TYPE_AREA_OF_INTEREST"],
+                "region_area": [self._location_type()],
+            },
+            "command": [
+                {
+                    "name": "LookAt",
+                    "units": "locationList",
+                    "completion_time": _duration(60),
+                    "type": "COMMAND_TYPE_LOOK_AT",
+                }
+            ],
+        }
+
+    def to_enu(self, loc: Message) -> Vec:
+        """A SAPIENT ``Location`` (UTM_M in our zone, or LAT_LNG_DEG_M) in the local ENU frame."""
+        system = str(loc.get("coordinate_system", ""))
+        if system.endswith("UTM_M"):
+            north = self.opts.origin_lla[0] >= 0.0
+            lat, lon = from_utm(float(loc["x"]), float(loc["y"]), self._zone_number, north)
+        elif system.endswith("LAT_LNG_DEG_M"):
+            lon, lat = float(loc["x"]), float(loc["y"])  # x as longitude (easting-like), see interop.md
+        else:
+            raise ValueError(f"unsupported coordinate system {system!r}")
+        z = float(loc.get("z", self.opts.origin_lla[2]))
+        return np.array(lla_to_enu(self.opts.origin_lla, lat, lon, z))
+
+    def look_at(self, msg: Message) -> tuple[str, Vec] | None:
+        """If ``msg`` is a task asking this node to look at an area, return its id and centre.
+
+        The Task message table itself (ICD section 6.5) was not available when this was
+        written; the field path read here (``task.task_id``, ``task.command.look_at.locations``)
+        is an assumption to align with the ``.proto`` files. The command type, LOOK_AT with a
+        location list, is from the ICD's command definition (5.6.9).
+        """
+        task = msg.get("task")
+        if not isinstance(task, dict):
+            return None
+        look = (task.get("command") or {}).get("look_at") or {}
+        locs = look.get("locations") or []
+        if not locs:
+            return None
+        pts = np.array([self.to_enu(loc) for loc in locs])
+        return str(task.get("task_id", "")), pts.mean(axis=0)
+
+    def task_ack(self, t: float, task_id: str, accepted: bool, reason: str = "") -> None:
+        content: Message = {
+            "task_id": task_id,
+            "task_status": "TASK_STATUS_ACCEPTED" if accepted else "TASK_STATUS_REJECTED",
+        }
+        if reason:
+            content["reason"] = [reason]
+        self._emit(t, self.camera, "task_ack", content)
+
     # ------------------------------------------------------------------ messages
     def registration(self, t: float, node: _Node) -> None:
         mode = {
@@ -162,7 +242,7 @@ class SapientExporter:
             "scan_type": "SCAN_TYPE_STEERABLE" if node is self.camera else "SCAN_TYPE_FIXED",
             "tracking_type": "TRACKING_TYPE_TRACK" if node is self.camera else "TRACKING_TYPE_NONE",
             "detection_definition": {"location_type": self._location_type()},
-            "task": [],
+            "task": [self._look_at_definition()] if node is self.camera else [],
             "mode_type": "MODE_TYPE_PERMANENT",
         }
         content = {

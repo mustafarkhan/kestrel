@@ -1,0 +1,61 @@
+{
+  "seed0": 6000,
+  "avoidance": true,
+  "runs": 24,
+  "completed_and_landed": 0,
+  "returned_early_for_traffic": 0,
+  "landed_safely": 24,
+  "runs_with_contact_tracked": 19,
+  "separation_violations": 0,
+  "lowc_events": 0,
+  "encounters": 12,
+  "encounters_detected": 4,
+  "false_alarms_per_flight_hour": 3.93,
+  "bird_tracks": 0,
+  "birds_reported_as_drone": 0,
+  "drone_tracks": 24,
+  "drone_tracks_reported_as_drone": 24,
+  "min_bird_separation_m": null,
+  "runs_cued": 24,
+  "runs_confirmed": 22,
+  "cue_to_confirm_s": {
+    "median": 22.45,
+    "p90": 25.73
+  },
+  "cue_to_track_s": {
+    "median": 22.45,
+    "p90": 25.73
+  },
+  "entry_to_track_s": {
+    "median": 20.2,
+    "p90": 23.66
+  },
+  "entry_to_confirm_s": {
+    "median": 20.2,
+    "p90": 23.66
+  },
+  "confirm_t_s_median": 24.8,
+  "investigations": 24,
+  "team_min_separation_m": null,
+  "track_error_all_m": {
+    "median": 5.135,
+    "p90": 11.07
+  },
+  "investigations_confirmed": 19,
+  "reports_buffered": 194,
+  "jammed_s": 1253.8000000000002,
+  "observed_while_jammed_s": 267.20000000000005,
+  "min_separation_m": {
+    "min": 15.4,
+    "median": 32.155
+  },
+  "time_to_first_track_s_median": 23.1,
+  "track_error_median_m": {
+    "median": 4.879,
+    "p90": 7.4962
+  },
+  "target_in_fov_fraction_median": 1.0,
+  "false_tracks_per_run_median": 0.0,
+  "energy_actual_over_estimate_median": 0.06370357634112793,
+  "final_distance_from_home_m_max": 0.22
+}

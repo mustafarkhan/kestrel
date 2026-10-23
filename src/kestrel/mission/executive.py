@@ -44,6 +44,7 @@ from kestrel.mission.schema import (
     OrbitTask,
     ReturnHomeTask,
     SearchTask,
+    StandbyTask,
     SurveyTask,
     TakeoffTask,
     Task,
@@ -60,6 +61,10 @@ YIELD_MARGIN_M = 6.0  # yield if the predicted closest approach is under min sep
 YIELD_CLEAR_S = 2.0  # conflict must stay clear this long before the path resumes
 YIELD_MAX_S = 60.0  # give up on the task (skip it) if it stays blocked this long
 CUE_AGE_S = 3.0  # external cues arrive late (acoustic: ~1 s) so they are trusted for longer
+INVESTIGATE_STANDOFF_M = 45.0  # outside the keep-out the safety monitor holds around a cue
+INVESTIGATE_TILT_DEG = 12.0  # look up the reported column: targets above are seen against sky
+INVESTIGATE_RADIUS_M = 35.0  # a drone track this close (horizontally) to the report confirms it
+REINVESTIGATE_S = 90.0  # a new report this close to an investigated one, this soon, is the same
 TRAFFIC_BUDGET_S = 120.0  # total time spent giving way before the mission returns home
 # Giving way on the way home is capped separately: traffic circling near home could otherwise
 # hold the aircraft out indefinitely in short yields. Past it, the safety monitor alone keeps
@@ -359,6 +364,104 @@ class TrackB(Behaviour):
         return math.degrees(math.atan2(d[2], math.hypot(d[0], d[1])))
 
 
+class StandbyB(Behaviour):
+    """Fly to a station, then wait there with the camera scanning: the alert posture."""
+
+    name = "standby"
+
+    def __init__(self, path: PathB, duration_s: float) -> None:
+        self.path = path
+        self.duration = duration_s
+        self.hold = HoldB(1e9, scan=True, name="standby")
+        self.on_station = False
+        self.t0: float | None = None
+
+    def start(self, ctx: Context) -> None:
+        if self.t0 is None:
+            self.t0 = ctx.t  # the standby period runs from here, excursions included
+        self.on_station = False
+        self.path.start(ctx)
+
+    def resume(self, ctx: Context) -> None:
+        if self.on_station:
+            self.hold.resume(ctx)
+        else:
+            self.path.resume(ctx)
+
+    def step(self, ctx: Context) -> Setpoint | None:
+        if not self.on_station and self.path.done(ctx):
+            self.on_station = True
+            self.hold.start(ctx)
+        return self.hold.step(ctx) if self.on_station else self.path.step(ctx)
+
+    def done(self, ctx: Context) -> bool:
+        return self.t0 is not None and ctx.t - self.t0 >= self.duration
+
+
+class InvestigateB(Behaviour):
+    """Go and look at a reported position the camera has not seen yet.
+
+    The report (an acoustic fix, or a tasking from a command node) gives a horizontal
+    position and no altitude. The observer closes to a standoff from it at its own
+    altitude, nose and camera on the reported column with the gimbal tilted up, so
+    anything flying there is seen against sky. It ends when a drone track is confirmed
+    near the report, or after a timeout; the executive logs which.
+    """
+
+    name = "investigate"
+
+    def __init__(
+        self, xy: Vec, source: str, standoff_m: float, timeout_s: float, v_max: float, a_max: float
+    ) -> None:
+        self.xy = np.asarray(xy, dtype=float)[0:2].copy()
+        self.source = source
+        self.standoff = standoff_m
+        self.timeout = timeout_s
+        self.v_max = v_max
+        self.a_max = a_max
+        self.t0 = 0.0
+        self.ref: ReferenceFilter | None = None
+        self.last_t = 0.0
+        self.result: str | None = None  # "confirmed" or "unconfirmed"
+        self.track_id: int | None = None
+        self.report_t = 0.0  # when the report was made (the sound was heard, the tasking sent)
+        self.altitude = 0.0  # held throughout: low enough that a target above is seen against sky
+
+    def start(self, ctx: Context) -> None:
+        self.t0 = ctx.t
+        if self.altitude <= 0.0:
+            self.altitude = float(ctx.state.pos[2])
+        self.resume(ctx)
+
+    def resume(self, ctx: Context) -> None:
+        self.ref = ReferenceFilter(
+            ctx.state.pos, ctx.state.vel, omega=0.9, v_max=self.v_max, a_max=self.a_max, vz_max=1.5
+        )
+        self.last_t = ctx.t
+
+    def goal(self, pos: Vec) -> Vec:
+        d = self.xy - pos[0:2]
+        n = float(np.linalg.norm(d))
+        if n <= self.standoff:
+            return np.array([pos[0], pos[1], self.altitude])
+        xy = self.xy - d / n * self.standoff
+        return np.array([xy[0], xy[1], self.altitude])
+
+    def step(self, ctx: Context) -> Setpoint | None:
+        assert self.ref is not None
+        dt = max(ctx.t - self.last_t, 1e-3)
+        self.last_t = ctx.t
+        pos, vel, acc = self.ref.step(self.goal(ctx.state.pos), np.zeros(3), dt)
+        d = self.xy - ctx.state.pos[0:2]
+        return Setpoint(pos=pos, vel=vel, acc=acc, yaw=math.atan2(d[1], d[0]))
+
+    def done(self, ctx: Context) -> bool:
+        return self.result is not None
+
+    def gimbal_tilt(self, ctx: Context) -> float | None:
+        return INVESTIGATE_TILT_DEG
+
+
 class LandB(Behaviour):
     name = "land"
     low_altitude_ok = True
@@ -417,6 +520,8 @@ class Executive:
         self.yield_last_t = 0.0
         self.yield_total_s = 0.0
         self.return_yield_s = 0.0
+        self.requests: list[tuple[float, Vec, str]] = []  # investigation requests from outside
+        self.investigated: list[tuple[float, Vec]] = []  # (time, position) of investigations
         self.handled_aircraft: dict[int, tuple[float, Vec]] = {}  # track id -> (last seen, position)
         self.watch_radius_m = 70.0
         self.watch_memory_s = 15.0  # 15 s at 8 m/s: the contact is within ~135 m of where it was
@@ -455,6 +560,8 @@ class Executive:
             )
         if isinstance(task, HoldTask):
             return HoldB(task.duration_s)
+        if isinstance(task, StandbyTask):
+            return StandbyB(PathB("goto", g.points, g.speed, a, sweep_deg=SWEEP_DEG), task.duration_s)
         if isinstance(task, TrackTask):
             return TrackB(
                 self._standoff(task.standoff_m),
@@ -523,6 +630,102 @@ class Executive:
         else:  # hold position until the operator or the energy monitor decides
             self.tasks = [*self.tasks[: self.index + 1], ReturnHomeTask()]
             self._activate(HoldB(1e9, name="hold (operator stop)"), ctx)
+
+    # ------------------------------------------------------------------ investigations
+    def request_investigate(self, xy: Vec, t: float, source: str) -> None:
+        """A tasking from outside (operator, or a command node over SAPIENT): go and look here."""
+        self.requests.append((t, np.asarray(xy, dtype=float)[0:2].copy(), source))
+        self._log(t, "tasking", f"{source}: investigate ({xy[0]:.0f}, {xy[1]:.0f})")
+
+    def _recently_investigated(self, xy: Vec, t: float) -> bool:
+        return any(
+            t - t0 < REINVESTIGATE_S and float(np.linalg.norm(xy - p)) < 60.0 for t0, p in self.investigated
+        )
+
+    def _investigations(self, ctx: Context) -> None:
+        cur = self.current
+        if isinstance(cur, InvestigateB):
+            if cur.result is not None:
+                return
+            near = [
+                c
+                for c in ctx.cues
+                if c.ident < 0
+                and ctx.t - c.last_hit_t < CUE_AGE_S
+                and float(np.linalg.norm(c.pos[0:2] - cur.xy)) < 60.0
+            ]
+            if near:  # the report is refreshed as the aircraft moves
+                cur.xy = min(near, key=lambda c: float(np.linalg.norm(c.pos[0:2] - cur.xy))).pos[0:2].copy()
+            to_report = cur.xy - ctx.state.pos[0:2]
+            # Confirmation is "an aircraft is there", which a commander needs at once; whether it
+            # is a drone follows as the classifier gathers evidence. Only a track already called
+            # a bird does not confirm a report.
+            for tr in ctx.tracks:
+                if tr.hits < 8 or (tr.p_uav is not None and tr.p_uav <= 0.4):
+                    continue
+                d = tr.pos[0:2] - ctx.state.pos[0:2]
+                off = abs(wrap_pi(math.atan2(d[1], d[0]) - math.atan2(to_report[1], to_report[0])))
+                if float(np.linalg.norm(tr.pos[0:2] - cur.xy)) < INVESTIGATE_RADIUS_M or off < math.radians(
+                    12.0
+                ):
+                    cur.result, cur.track_id = "confirmed", tr.ident
+                    p = (
+                        ""
+                        if tr.p_uav is None
+                        else (
+                            f", drone p={tr.p_uav:.2f}"
+                            if tr.p_uav >= DECLARE_P_UAV
+                            else ", not yet classified"
+                        )
+                    )
+                    self._log(
+                        ctx.t,
+                        "confirmed",
+                        f"{cur.source}: track {tr.ident} at "
+                        f"({tr.pos[0]:.0f}, {tr.pos[1]:.0f}, {tr.pos[2]:.0f}){p}, "
+                        f"{ctx.t - cur.report_t:.1f} s after the report",
+                    )
+                    return
+            if ctx.t - cur.t0 >= cur.timeout:
+                cur.result = "unconfirmed"
+                self._log(ctx.t, "unconfirmed", f"{cur.source}: nothing seen in {cur.timeout:.0f} s")
+            return
+        if (
+            self.aborted
+            or cur is None
+            or isinstance(cur, TrackB | TakeoffB | LandB)
+            or cur.name == "return_home"
+            or cur.done(ctx)  # the task's time is up: move on rather than start another look
+        ):
+            return
+        cand: tuple[float, Vec, str] | None = None
+        if self.requests:
+            cand = self.requests.pop(0)
+        elif self.mission.on_cue == "investigate":
+            fresh = [
+                c
+                for c in ctx.cues
+                if c.ident < 0
+                and ctx.t - c.last_hit_t < CUE_AGE_S
+                and not self._recently_investigated(c.pos[0:2], ctx.t)
+            ]
+            if fresh:
+                c = min(fresh, key=lambda c: float(np.linalg.norm(c.pos[0:2] - ctx.state.pos[0:2])))
+                cand = (c.last_hit_t, c.pos[0:2].copy(), "acoustic cue")
+        if cand is None:
+            return
+        t_report, xy, source = cand
+        lim = self.cfg.safety
+        b = InvestigateB(
+            xy, source, INVESTIGATE_STANDOFF_M, self.mission.investigate_timeout_s,
+            lim.max_horizontal_speed * 0.85, lim.max_acceleration * 0.7,
+        )  # fmt: skip
+        b.report_t = t_report
+        b.altitude = self.altitude  # the mission altitude, not wherever a climb happened to be
+        self.investigated.append((ctx.t, xy.copy()))
+        self.stack.append(cur)
+        self._log(ctx.t, "investigate", f"{source} at ({xy[0]:.0f}, {xy[1]:.0f}): {cur.name} -> investigate")
+        self._activate(b, ctx)
 
     # ------------------------------------------------------------------ main step
     def _contacts(self, ctx: Context) -> None:
@@ -703,7 +906,7 @@ class Executive:
 
     def step(self, ctx: Context) -> Setpoint | None:
         sp = self._deconflict(ctx, self._step(ctx))
-        watch = self._watch_target(ctx)
+        watch = None if isinstance(self.current, InvestigateB) else self._watch_target(ctx)
         if sp is not None and watch is not None:
             d = watch - ctx.state.pos
             sp = sp.with_(yaw=math.atan2(d[1], d[0]), yaw_rate=0.0)
@@ -714,6 +917,7 @@ class Executive:
             return None
         if self.current is None:
             self._advance(ctx)
+        self._investigations(ctx)
         self._contacts(ctx)
         # tracked ids stay handled while their track is alive, so the same aircraft
         # does not interrupt the mission over and over
@@ -733,7 +937,7 @@ class Executive:
         return self.current.step(ctx)
 
     def gimbal_tilt(self, ctx: Context) -> float | None:
-        watch = self._watch_target(ctx)
+        watch = None if isinstance(self.current, InvestigateB) else self._watch_target(ctx)
         if watch is not None:
             d = watch - ctx.state.pos
             return math.degrees(math.atan2(d[2], math.hypot(d[0], d[1])))

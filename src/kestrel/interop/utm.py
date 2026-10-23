@@ -22,6 +22,16 @@ _ALPHA = (
     13.0 * _N**2 / 48.0 - 3.0 * _N**3 / 5.0,
     61.0 * _N**3 / 240.0,
 )
+_BETA = (
+    _N / 2.0 - 2.0 * _N**2 / 3.0 + 37.0 * _N**3 / 96.0,
+    _N**2 / 48.0 + _N**3 / 15.0,
+    17.0 * _N**3 / 480.0,
+)
+_DELTA = (
+    2.0 * _N - 2.0 * _N**2 / 3.0 - 2.0 * _N**3,
+    7.0 * _N**2 / 3.0 - 8.0 * _N**3 / 5.0,
+    56.0 * _N**3 / 15.0,
+)
 _E2 = F * (2.0 - F)
 _LAT_BANDS = "CDEFGHJKLMNPQRSTUVWX"
 
@@ -54,6 +64,33 @@ def to_utm(lat_deg: float, lon_deg: float, zone_number: int | None = None) -> tu
     if not northern:
         northing += N0_SOUTH
     return easting, northing, zone_number, northern
+
+
+def from_utm(easting: float, northing: float, zone_number: int, northern: bool) -> tuple[float, float]:
+    """Inverse of :func:`to_utm`: ``(lat_deg, lon_deg)``."""
+    xi = (northing - (0.0 if northern else N0_SOUTH)) / (K0 * _A_HAT)
+    eta = (easting - E0) / (K0 * _A_HAT)
+    xi_p, eta_p = xi, eta
+    for j, b in enumerate(_BETA, start=1):
+        xi_p -= b * math.sin(2 * j * xi) * math.cosh(2 * j * eta)
+        eta_p -= b * math.cos(2 * j * xi) * math.sinh(2 * j * eta)
+    chi = math.asin(math.sin(xi_p) / math.cosh(eta_p))
+    phi = chi + sum(d * math.sin(2 * j * chi) for j, d in enumerate(_DELTA, start=1))
+    lon0 = math.radians((zone_number - 1) * 6 - 180 + 3)
+    lam = lon0 + math.atan2(math.sinh(eta_p), math.cos(xi_p))
+    return math.degrees(phi), math.degrees(lam)
+
+
+def lla_to_enu(
+    origin: tuple[float, float, float], lat: float, lon: float, alt: float
+) -> tuple[float, float, float]:
+    """Inverse of :func:`enu_to_lla` (same local approximation)."""
+    lat0, lon0, alt0 = origin
+    phi = math.radians(lat0)
+    s2 = math.sin(phi) ** 2
+    r_n = A / math.sqrt(1.0 - _E2 * s2)
+    r_m = A * (1.0 - _E2) / (1.0 - _E2 * s2) ** 1.5
+    return math.radians(lon - lon0) * r_n * math.cos(phi), math.radians(lat - lat0) * r_m, alt - alt0
 
 
 def enu_to_lla(

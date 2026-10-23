@@ -1,5 +1,7 @@
 # Architecture
 
+The role this architecture serves, and its limits, are in [conops.md](conops.md).
+
 Kestrel is an autonomy stack for a small multirotor that is *told* what to do in
 plain language and *sees* other aircraft with a single camera. Everything runs in
 one Python process at a fixed rate; the autopilot (simulated, or ArduPilot over
@@ -55,6 +57,7 @@ flowchart LR
 | `perception/acoustic.py` | ground microphone network | bearings triangulated into horizontal fixes; altitude unknown, so a column |
 | `interop/sapient.py` | reports to other systems | SAPIENT ICD v7 registration, status, detection; UTM coordinates |
 | `sim/birds.py` | birds in the simulated sky | intermittent flapping and gliding, wandering paths |
+| `team.py` | several observers in one simulation | one fused tracker (triangulation), shared contacts, teammates as cooperative traffic |
 | `safety/monitor.py` | run-time assurance | every setpoint filtered; latched RTL/LAND |
 | `safety/energy.py` | battery planning model | shared by validator and monitor |
 | `control/` | cascaded position/velocity + SE(3) attitude, mixer | what the simulated autopilot runs |

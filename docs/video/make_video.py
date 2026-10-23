@@ -24,7 +24,7 @@ import imageio.v2 as imageio
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from kestrel.config import load_config, load_scenario
+from kestrel.config import LinkLossEvent, load_config, load_scenario
 from kestrel.interop.sapient import SapientExporter, SapientOptions
 from kestrel.perception.acoustic import node_grid
 from kestrel.perception.camera import Camera
@@ -33,6 +33,7 @@ from kestrel.perception.detector import SkyTargetDetector
 from kestrel.perception.render import SkyRenderer
 from kestrel.runtime import Frame, RunResult, plan_and_validate, run
 from kestrel.sim.birds import BirdState
+from kestrel.team import run_team
 
 ROOT = Path(__file__).resolve().parents[2]
 W, H, FPS = 1280, 720, 30
@@ -276,12 +277,16 @@ def slide_rejected(cfg_path: Path, scen_path: Path) -> list[Image.Image]:
 
 CAM_X, CAM_Y, CAM_W, CAM_H = 24, 84, 768, 576
 MAP_X, MAP_Y, MAP_S = 816, 84, 440
-VIEW_LO = np.array([-100.0, -38.0])
-VIEW_SPAN = 200.0
+VIEW = {"lo": np.array([-100.0, -38.0]), "span": 200.0}
+
+
+def set_view(lo: tuple[float, float], span: float) -> None:
+    VIEW["lo"], VIEW["span"] = np.array(lo, dtype=float), span
 
 
 def _to_map(xy: np.ndarray, s: float) -> tuple[float, float]:
-    return ((xy[0] - VIEW_LO[0]) / VIEW_SPAN * s, s - (xy[1] - VIEW_LO[1]) / VIEW_SPAN * s)
+    lo, span = VIEW["lo"], float(VIEW["span"])  # type: ignore[arg-type]
+    return ((xy[0] - lo[0]) / span * s, s - (xy[1] - lo[1]) / span * s)
 
 
 def _caption(beh: str, t: float, events: dict[str, float], yielding: bool, cue_only: bool) -> str:
@@ -326,18 +331,31 @@ def _draw_map(res: RunResult, a: dict[str, np.ndarray], k: int, yaw: float) -> I
     im = Image.new("RGB", (s, s), PANEL)
     d = ImageDraw.Draw(im, "RGBA")
     w = res.scenario.world
-    for gx in range(-100, 101, 50):
+    lo, span = VIEW["lo"], float(VIEW["span"])  # type: ignore[arg-type]
+    for gx in np.arange(math.ceil(lo[0] / 50) * 50, lo[0] + span + 1, 50):
         x, _ = _to_map(np.array([gx, 0.0]), s)
         d.line([(x, 0), (x, s)], fill=(*LINE, 255), width=1)
-    for gy in range(0, 161, 50):
+    for gy in np.arange(math.ceil(lo[1] / 50) * 50, lo[1] + span + 1, 50):
         _, y = _to_map(np.array([0.0, gy]), s)
         d.line([(0, y), (s, y)], fill=(*LINE, 255), width=1)
-    site = w.sites.get("north_field")
-    if site is not None and hasattr(site, "min_xy"):
-        p0 = _to_map(np.array(site.min_xy), s)
-        p1 = _to_map(np.array(site.max_xy), s)
-        d.rectangle([p0[0], p1[1], p1[0], p0[1]], outline=(*INK2, 140), width=3)
-        d.text((p0[0] + 12, p1[1] + 8), "north field", fill=(*INK2, 255), font=sans(26))
+    for name, site in w.sites.items():
+        if "__" in name:
+            continue  # per-observer shares of a site, drawn as the site itself
+        label = name.replace("_", " ")
+        if hasattr(site, "min_xy"):
+            p0 = _to_map(np.array(site.min_xy), s)
+            p1 = _to_map(np.array(site.max_xy), s)
+            d.rectangle([p0[0], p1[1], p1[0], p0[1]], outline=(*INK2, 140), width=3)
+            d.text((p0[0] + 12, p1[1] + 8), label, fill=(*INK2, 255), font=sans(24))
+        elif hasattr(site, "radius"):
+            c = _to_map(np.array(site.center), s)
+            r = site.radius / span * s
+            d.ellipse([c[0] - r, c[1] - r, c[0] + r, c[1] + r], outline=(*INK2, 110), width=3)
+            d.text((c[0] - r + 8, c[1] - 14), label, fill=(*INK2, 255), font=sans(24))
+        else:
+            c = _to_map(np.array(site.xy), s)
+            d.polygon([(c[0], c[1] - 12), (c[0] - 10, c[1] + 8), (c[0] + 10, c[1] + 8)], fill=(*INK2, 200))
+            d.text((c[0] + 14, c[1] - 10), label, fill=(*INK2, 255), font=sans(22))
     hx, hy = _to_map(np.array(w.home[:2]), s)
     d.ellipse([hx - 12, hy - 12, hx + 12, hy + 12], outline=(*INK, 255), width=4)
     d.text((hx + 18, hy - 6), "home", fill=(*INK2, 255), font=sans(24))
@@ -364,7 +382,7 @@ def _draw_map(res: RunResult, a: dict[str, np.ndarray], k: int, yaw: float) -> I
     ox, oy = _to_map(pos[-1], s)
     # camera field of view wedge, 40 m long
     half = math.radians(res.config.camera.hfov_deg / 2)
-    r_px = 40.0 / VIEW_SPAN * s
+    r_px = 40.0 / float(VIEW["span"]) * s  # type: ignore[arg-type]
     pts = [(ox, oy)]
     for k2 in range(13):
         ang = yaw - half + 2 * half * k2 / 12
@@ -373,7 +391,7 @@ def _draw_map(res: RunResult, a: dict[str, np.ndarray], k: int, yaw: float) -> I
     d.ellipse([ox - 11, oy - 11, ox + 11, oy + 11], fill=(*BLUE, 255))
     if len(tg):
         tx, ty = _to_map(tg[-1], s)
-        rs = res.config.safety.min_separation / VIEW_SPAN * s
+        rs = res.config.safety.min_separation / float(VIEW["span"]) * s  # type: ignore[arg-type]
         d.ellipse([tx - rs, ty - rs, tx + rs, ty + rs], outline=(*RED, 150), width=3)
         d.ellipse([tx - 9, ty - 9, tx + 9, ty + 9], fill=(*ORANGE, 255))
     trk = a["track"][k]
@@ -457,6 +475,70 @@ def _camera(fr: Frame, d: ImageDraw.ImageDraw, im: Image.Image, cam_w: int) -> N
     )
 
 
+def _node_caption(res: RunResult, k: int, t: float) -> str:
+    """Captions for the sensor-node flight: say what the node is doing and why."""
+    log = res.log
+    if log.link_ok and not log.link_ok[k]:
+        return (
+            "Ground link jammed: the node keeps working on board and holds its reports until the link returns"
+        )
+    recent = [e for e in res.events if e.t <= t]
+    last = recent[-1] if recent else None
+    conf = [e for e in recent if e.kind == "confirmed" and t - e.t < 6.0]
+    if conf:
+        detail = conf[-1].detail.split(": ", 1)[-1]
+        return (
+            "Confirmed: " + detail.split(", ")[0] + (", " + detail.split(", ")[1] if ", " in detail else "")
+        )
+    beh = log.behaviour[k]
+    if beh == "investigate":
+        inv = [e for e in recent if e.kind == "investigate"]
+        src = inv[-1].detail.split(":")[0] if inv else "report"
+        if "SAPIENT" in src:
+            return (
+                "C2 tasking over SAPIENT (LOOK_AT), acknowledged: go and look, camera tilted up at the column"
+            )
+        if src.startswith("acoustic"):
+            return (
+                f"Investigating an {src}: no altitude from sound, so close in low and look up at the column"
+            )
+        return f"Investigating: {src}"
+    if last is not None and last.kind == "tasking" and t - last.t < 4.0:
+        return "Tasking received from the command node"
+    if beh == "standby":
+        return "Standing by on station: camera scanning, waiting for the ground sensors"
+    if beh == "takeoff":
+        return "Launch from the quay"
+    if beh == "track":
+        return "Follow the confirmed drone from 30 m: detection reports stream to the command node"
+    if beh == "return_home":
+        return "Return home"
+    if beh == "land":
+        return "Land and disarm"
+    return beh
+
+
+def _node_speed(res: RunResult) -> Callable[[float], float]:
+    slow: list[tuple[float, float]] = []
+    for e in res.events:
+        if e.kind in ("investigate", "tasking"):
+            slow.append((e.t - 1.0, e.t + 4.0))
+        if e.kind == "confirmed":
+            slow.append((e.t - 4.0, e.t + 5.0))
+    jam = [
+        res.log.t[i]
+        for i in range(1, len(res.log.link_ok))
+        if res.log.link_ok[i - 1] and not res.log.link_ok[i]
+    ]
+    for tj in jam[:1]:
+        slow.append((tj - 1.0, tj + 5.0))
+
+    def speed(t: float) -> float:
+        return 1.0 if any(a <= t < b for a, b in slow) else 6.0
+
+    return speed
+
+
 def _speed_profile(res: RunResult, t_end: float) -> Callable[[float], float]:
     """Playback speed over flight time: real time around the moments worth watching."""
     ev = res.events
@@ -482,7 +564,7 @@ def _speed_profile(res: RunResult, t_end: float) -> Callable[[float], float]:
     return speed
 
 
-def flight_frames(res: RunResult) -> Iterator[Image.Image]:
+def flight_frames(res: RunResult, number: str = "4", node: bool = False) -> Iterator[Image.Image]:
     """Streamed, not listed: thousands of 720p frames would not fit in memory."""
     a = res.log.arrays()
     t_log = a["t"]
@@ -495,7 +577,7 @@ def flight_frames(res: RunResult) -> Iterator[Image.Image]:
     t_end = float(t_log[-1])
     t_int = ev.get("interrupt", 30.0)
     yields = _intervals(res, "yield", ("resume", "skip", "abort"))
-    speed = _speed_profile(res, t_end)
+    speed = _node_speed(res) if node else _speed_profile(res, t_end)
     times = [0.0]
     while times[-1] < t_end:
         times.append(times[-1] + speed(times[-1]) / FPS)
@@ -516,7 +598,7 @@ def flight_frames(res: RunResult) -> Iterator[Image.Image]:
         yielding = any(a0 <= t < a1 for a0, a1 in yields)
         no_track = all(np.isnan(a["track"][max(0, k - 20) : k + 1, 0]))
         cue_only = len(res.log.cues[k]) > 0 and no_track and t < t_int
-        cap = "4  " + _caption(beh, t, ev, yielding, cue_only)
+        cap = f"{number}  " + (_node_caption(res, k, t) if node else _caption(beh, t, ev, yielding, cue_only))
         size = 26
         while size > 16 and d.textlength(cap, font=sans(size, "SemiBold")) > W - 40 - bw - 60 - CAM_X:
             size -= 1
@@ -532,7 +614,12 @@ def flight_frames(res: RunResult) -> Iterator[Image.Image]:
             font=sans(14),
         )
         _hud(d, res, a, k)
-        if t_int <= t < t_int + 10:
+        if node and res.log.link_ok and not res.log.link_ok[k]:
+            d.rounded_rectangle([CAM_X + 14, CAM_Y + 14, CAM_X + 330, CAM_Y + 52], radius=8, fill=RED)
+            d.text(
+                (CAM_X + 26, CAM_Y + 20), "LINK JAMMED · reports held", fill=INK, font=sans(20, "SemiBold")
+            )
+        if not node and t_int <= t < t_int + 10:
             d.text(
                 (CAM_X + 14, CAM_Y + 14),
                 f"first confirmed at {det_range:.0f} m",
@@ -541,6 +628,244 @@ def flight_frames(res: RunResult) -> Iterator[Image.Image]:
             )
         footer(d, f"closed-loop simulation · t = {t:5.1f} s · physics 400 Hz, autonomy 20 Hz, camera 10 Hz")
         yield fade(im, min(1.0, idx / 6, (total - idx + 1) / 9))
+
+
+# --------------------------------------------------------------------------- sensor node
+
+
+def slide_role() -> list[Image.Image]:
+    boxes = [
+        ("ground sensors", "microphones, radar", 70, 250),
+        ("C2 / fusion node", "SAPIENT", 470, 250),
+        ("Kestrel", "airborne sensor node", 870, 250),
+    ]
+
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((70, 60), "9  The role: an airborne sensor node", fill=BLUE, font=sans(26, "SemiBold"))
+        d.text(
+            (70, 104),
+            "Finds, tracks, identifies and reports. Goes where fixed sensors are blind. Never engages.",
+            fill=INK,
+            font=sans(24),
+        )
+        for i, (title, sub, x, y) in enumerate(boxes):
+            if t < 0.5 * i:
+                continue
+            d.rounded_rectangle(
+                [x, y, x + 330, y + 110], radius=14, fill=PANEL, outline=AQUA if i == 2 else LINE, width=3
+            )
+            d.text((x + 22, y + 22), title, fill=INK, font=sans(28, "SemiBold"))
+            d.text((x + 22, y + 64), sub, fill=INK2, font=sans(20))
+        if t > 1.2:
+            for x0, x1, y, label in ((400, 470, 290, "cue"), (800, 870, 290, "task")):
+                d.line([(x0, y), (x1 - 8, y)], fill=INK2, width=4)
+                d.polygon([(x1, y), (x1 - 14, y - 8), (x1 - 14, y + 8)], fill=INK2)
+                d.text((x0 + 4, y - 32), label, fill=INK2, font=sans(18))
+            d.line([(1035, 360), (1035, 420), (635, 420), (635, 368)], fill=AQUA, width=4)
+            d.polygon([(635, 360), (627, 374), (643, 374)], fill=AQUA)
+            d.text(
+                (700, 428),
+                "detection reports: position, velocity, class, 1-sigma errors",
+                fill=AQUA,
+                font=sans(18),
+            )
+        rows = [
+            "stand by on station → hear or be tasked → go and look → confirm and classify → report → follow",
+            "keeps clear of every contact, birds included · keeps working through a jammed link, for a bounded time",
+            "air · land · sea surface · electromagnetic: one loop, measured below",
+        ]
+        if t > 2.0:
+            for i, line in enumerate(rows):
+                d.text((70, 500 + 40 * i), line, fill=INK2, font=sans(21))
+        footer(d, "Concept of operations: docs/conops.md")
+        return im
+
+    return list(faded(hold(r, 11.0)))
+
+
+def team_frames(res: RunResult, number: str = "11") -> Iterator[Image.Image]:
+    """Two observers, one fused picture: top-down, with the lines of sight that fix range."""
+    a = res.log.arrays()
+    t_log = a["t"]
+    team = res.log.team_pos
+    fused = res.log.fused
+    tgt = a["target"]
+    t_end = float(t_log[-1])
+    speed = 4.0
+    times = list(np.arange(0.0, t_end, speed / FPS))
+    total = len(times)
+    errs: list[tuple[float, float]] = []
+    big = 640
+    for idx, t in enumerate(times, start=1):
+        k = min(int(np.searchsorted(t_log, t)), len(t_log) - 1)
+        ss = 2
+        sz = big * ss
+        mp = Image.new("RGB", (sz, sz), PANEL)
+        md = ImageDraw.Draw(mp, "RGBA")
+        w = res.scenario.world
+        for name, site in w.sites.items():
+            if "__" in name or not hasattr(site, "min_xy"):
+                continue
+            p0, p1 = _to_map(np.array(site.min_xy), sz), _to_map(np.array(site.max_xy), sz)
+            md.rectangle([p0[0], p1[1], p1[0], p0[1]], outline=(*INK2, 120), width=3)
+        tg = tgt[max(0, k - 400) : k + 1]
+        tg = tg[~np.isnan(tg[:, 0])]
+        if len(tg) > 1:
+            md.line([_to_map(q, sz) for q in tg[::2]], fill=(*ORANGE, 220), width=4)
+        cols = [BLUE, (120, 200, 255)]
+        for j in range(team[k].shape[0]):
+            trail = np.array([tp[j] for tp in team[max(0, k - 600) : k + 1 : 3]])
+            if len(trail) > 1:
+                md.line([_to_map(q, sz) for q in trail], fill=(*cols[j % 2], 200), width=4)
+        fz = fused[k]
+        for q in team[k]:
+            for f in fz:
+                md.line([_to_map(q, sz), _to_map(f, sz)], fill=(*AQUA, 150), width=3)
+        for j, q in enumerate(team[k]):
+            x, y = _to_map(q, sz)
+            md.ellipse([x - 12, y - 12, x + 12, y + 12], fill=(*cols[j % 2], 255))
+        if len(tg):
+            x, y = _to_map(tg[-1], sz)
+            md.ellipse([x - 10, y - 10, x + 10, y + 10], fill=(*ORANGE, 255))
+        for f in fz:
+            x, y = _to_map(f, sz)
+            md.ellipse([x - 20, y - 20, x + 20, y + 20], outline=(*AQUA, 255), width=4)
+        if len(fz) and not np.isnan(tgt[k][0]):
+            errs.append((t, float(min(np.linalg.norm(f - tgt[k]) for f in fz))))
+        im = blank()
+        im.paste(mp.resize((big, big), Image.Resampling.LANCZOS), (40, 60))
+        d = ImageDraw.Draw(im)
+        d.text((40, 18), f"{number}  Two observers, one fused track", fill=INK, font=sans(26, "SemiBold"))
+        x0 = 720
+        lines = [
+            "Both cameras feed one tracker at the fusion node.",
+            "One camera measures bearing well and range poorly:",
+            "it guesses range from the drone's assumed size.",
+            "Two lines of sight crossing at an angle fix range",
+            "by triangulation.",
+        ]
+        for i, line in enumerate(lines):
+            d.text((x0, 80 + 32 * i), line, fill=INK2, font=sans(21))
+        gx, gy, gw, gh = x0, 290, 520, 180
+        d.text((gx, gy - 24), "fused position error [m], this flight", fill=MUTED, font=sans(16))
+        d.rectangle([gx, gy, gx + gw, gy + gh], fill=PANEL)
+        pts = [(gx + gw * tt / t_end, gy + gh - gh * min(e, 10.0) / 10.0) for tt, e in errs]
+        if len(pts) > 1:
+            d.line(pts, fill=AQUA, width=2)
+        d.text((gx + gw - 40, gy + gh - 22), "0", fill=MUTED, font=sans(14))
+        d.text((gx + gw - 40, gy + 6), "10", fill=MUTED, font=sans(14))
+        if errs:
+            d.text((x0, 490), f"now: {errs[-1][1]:4.1f} m", fill=AQUA, font=mono(26))
+        legend = [
+            ("observer 1", BLUE),
+            ("observer 2", (120, 200, 255)),
+            ("intruder", ORANGE),
+            ("fused track", AQUA),
+        ]
+        for i, (lab, col) in enumerate(legend):
+            d.ellipse([x0, 548 + 28 * i, x0 + 14, 562 + 28 * i], fill=col)
+            d.text((x0 + 24, 542 + 28 * i), lab, fill=INK2, font=sans(18))
+        footer(d, f"closed-loop simulation, two observers · t = {t:5.1f} s · ×{speed:.0f}")
+        yield fade(im, min(1.0, idx / 6, (total - idx + 1) / 9))
+
+
+def slide_node_results(matrix: dict[str, Any]) -> list[Image.Image]:
+    node = matrix.get("sensor_node", {})
+    sets = node.get("sets", [])
+
+    def mp(dd: dict[str, float] | None) -> str:
+        return "n/a" if dd is None else f"{dd['median']:.0f} s"
+
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((70, 50), "12  The sensor node, measured", fill=BLUE, font=sans(26, "SemiBold"))
+        d.text(
+            (70, 88),
+            f"stand by, investigate reports, follow: the same {node.get('runs', 24)} encounters "
+            f"(fresh seeds {node.get('seed0', '')}+) in each configuration",
+            fill=MUTED,
+            font=sans(19),
+        )
+        cols = [("configuration", 70), ("report → track", 400), ("entry → track", 530), ("position error", 660),
+                ("inside 12 m", 800), ("completed", 920), ("held while jammed", 1050)]  # fmt: skip
+        y = 140
+        for name, x in cols:
+            d.text((x, y), name, fill=MUTED, font=sans(17))
+        y += 34
+        for i, st in enumerate(sets):
+            if t < 0.35 * i:
+                continue
+            sm = st["summary"]
+            err = sm.get("track_error_all_m")
+            jam = sm.get("observed_while_jammed_s")
+            vals = [
+                mp(sm.get("cue_to_track_s")),
+                mp(sm.get("entry_to_track_s")),
+                "n/a" if err is None else f"{err['median']:.1f} m",
+                f"{sm['separation_violations']}/{sm['runs']}",
+                f"{sm['completed_and_landed']}/{sm['runs']}",
+                "n/a" if jam is None else f"{jam:.0f} of {sm['jammed_s']:.0f} s",
+            ]
+            d.line([(70, y - 6), (W - 60, y - 6)], fill=LINE, width=1)
+            d.text((70, y), st["label"], fill=INK, font=sans(19, "Medium"))
+            for (_, x), v in zip(cols[1:], vals, strict=True):
+                d.text((x, y), v, fill=INK, font=mono(19))
+            y += 40
+        if t >= 0.35 * len(sets):
+            for i, line in enumerate(
+                [
+                    "On a jammed link, returning home gives up every mission. Keeping working holds the",
+                    "picture through most of the jamming, at the cost of two runs coming inside 12 m.",
+                ]
+            ):
+                d.text((70, y + 24 + 30 * i), line, fill=INK2, font=sans(20))
+        footer(
+            d,
+            "medians over the runs; every number in docs/results/matrix.json, reproducible with kestrel bench",
+        )
+        return im
+
+    return list(faded(hold(r, 13.0)))
+
+
+COST = [
+    ("airframe, autopilot, GPS, telemetry", "Holybro X500 V2 kit", "£645-785"),
+    ("companion computer", "Jetson Orin Nano Super (launch price)", "$249"),
+    ("camera", "Raspberry Pi HQ camera", "$50"),
+    ("battery, lens, gimbal, mounts", "estimate, not sourced", "~€300"),
+]
+
+
+def slide_cost() -> list[Image.Image]:
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((70, 60), "13  What a node costs in parts", fill=BLUE, font=sans(26, "SemiBold"))
+        for i, (what, item, price) in enumerate(COST):
+            y = 130 + 54 * i
+            d.text((70, y), what, fill=INK, font=sans(23, "Medium"))
+            d.text((520, y), item, fill=INK2, font=sans(21))
+            d.text((980, y), price, fill=INK, font=mono(22))
+        d.line([(70, 352), (1210, 352)], fill=LINE, width=2)
+        d.text((70, 366), "about €1,350-1,500 per node in parts", fill=AQUA, font=sans(28, "SemiBold"))
+        notes = [
+            "Not a product price: no engineering, certification, ground station or support included.",
+            "For scale (ECFR, 2026): a Geran-type drone costs about €10,000; missiles fired at them,",
+            "several hundred thousand to a million euros each. A ground acoustic node: $400-500 (US Army CALL).",
+            "A sensor node replaces no interceptor; it helps make sure one is spent only on a real drone.",
+        ]
+        if t > 1.0:
+            for i, line in enumerate(notes):
+                d.text((70, 430 + 36 * i), line, fill=INK2, font=sans(21))
+        footer(
+            d, "Prices: retailer listings and launch announcements, October 2026; sources in docs/conops.md"
+        )
+        return im
+
+    return list(faded(hold(r, 11.0)))
 
 
 # --------------------------------------------------------------------------- birds
@@ -873,7 +1198,7 @@ def slide_standards() -> list[Image.Image]:
         d = ImageDraw.Draw(im)
         d.text(
             (96, 60),
-            "9  Held against published standards and field reports",
+            "14  Held against published standards and field reports",
             fill=BLUE,
             font=sans(26, "SemiBold"),
         )
@@ -925,7 +1250,7 @@ def slide_notes() -> list[Image.Image]:
         im = blank()
         d = ImageDraw.Draw(im)
         d.text(
-            (96, 70), "10  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
+            (96, 70), "15  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
         )
         for i, (prob, fix) in enumerate(NOTES):
             if t < 0.5 * i:
@@ -952,7 +1277,7 @@ def slide_next() -> list[Image.Image]:
     def r(t: float) -> Image.Image:
         im = blank()
         d = ImageDraw.Draw(im)
-        d.text((96, 120), "11  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
+        d.text((96, 120), "16  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
         for i, (k, v) in enumerate(rows):
             if t < 0.6 * i:
                 continue
@@ -987,6 +1312,20 @@ def slide_outro() -> list[Image.Image]:
 # --------------------------------------------------------------------------- main
 
 
+NODE_INSTRUCTION = (
+    "take off to 25 m, stand by at the berth for 4 minutes and investigate any acoustic cues, "
+    "and if you see a drone, follow it from 30 m for 45 seconds, then return home"
+)
+
+
+def _with_view(
+    lo: tuple[float, float], span: float, make: Callable[[], Iterable[Image.Image]]
+) -> Iterator[Image.Image]:
+    set_view(lo, span)
+    yield from make()
+    set_view((-100.0, -38.0), 200.0)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(ROOT / "docs" / "video" / "kestrel_demo.mp4"))
@@ -1002,6 +1341,32 @@ def main() -> None:
         )
     )
     res = run(INSTRUCTION, demo_cfg, demo_scen, record_every=1, record_downsample=1, sapient=sapient)
+    print("simulating the sensor-node flight ...", flush=True)
+    node_cfg = demo_cfg.model_copy(
+        update={"safety": demo_cfg.safety.model_copy(update={"link_loss_action": "continue"})}
+    )
+    port = load_scenario(ROOT / "scenarios" / "port.yaml").model_copy(
+        update={"link_loss": [LinkLossEvent(start_s=205.0, duration_s=40.0)]}
+    )
+    node_sapient = SapientExporter(SapientOptions(origin_lla=port.world.origin_lla, seed=port.seed))
+    corners = [
+        node_sapient.location(np.array([x, y, 30.0])) for x, y in [(70, 80), (110, 80), (110, 120), (70, 120)]
+    ]
+    task = {
+        "node_id": "c2-node",
+        "task": {"task_id": "C2-0001", "command": {"look_at": {"locations": corners}}},
+    }
+    node_res = run(
+        NODE_INSTRUCTION, node_cfg, port, record_every=1, record_downsample=1, sapient=node_sapient,
+        sapient_tasks=[(140.0, task)],
+    )  # fmt: skip
+    print("simulating two observers ...", flush=True)
+    team_res = run_team(
+        "take off to 25 m, survey the north field at 25 m with 30 m spacing, then return home",
+        load_config(ROOT / "configs" / "default.yaml"),
+        load_scenario(ROOT / "scenarios" / "airfield.yaml"),
+        2,
+    )
     matrix = json.loads((ROOT / "docs" / "results" / "matrix.json").read_text(encoding="utf-8"))
     writer = imageio.get_writer(
         args.out,
@@ -1021,6 +1386,14 @@ def main() -> None:
         ("sapient", lambda: slide_sapient(sapient.messages)),
         ("sitl", lambda: slide_sitl(ROOT / "docs" / "results" / "sitl_flight.json")),
         ("results", lambda: slide_results(matrix)),
+        ("role", slide_role),
+        (
+            "node flight",
+            lambda: _with_view((-160.0, -160.0), 320.0, lambda: flight_frames(node_res, "10", node=True)),
+        ),
+        ("team", lambda: _with_view((-100.0, -38.0), 200.0, lambda: team_frames(team_res))),
+        ("node results", lambda: slide_node_results(matrix)),
+        ("cost", slide_cost),
         ("standards", slide_standards),
         ("notes", slide_notes),
         ("next", slide_next),

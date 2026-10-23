@@ -122,6 +122,9 @@ def cmd_bench(args: argparse.Namespace) -> int:
         avoidance=not args.no_avoidance,
         intruders=args.intruders,
         first=args.first,
+        mission=args.mission,
+        jam_s=args.jam,
+        observers=args.observers,
     )
     print(json.dumps(summary, indent=2))
     return 0
@@ -193,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-avoidance", action="store_true", help="unmitigated baseline for the risk ratio")
     p.add_argument("--intruders", type=int, default=1, help="intruders per encounter")
     p.add_argument("--first", type=int, default=0, help="index of the first encounter (to split a set)")
+    p.add_argument("--mission", choices=["survey", "standby"], default="survey", help="benchmark mission")
+    p.add_argument("--jam", type=float, default=0.0, metavar="S", help="jam the ground link for S seconds")
+    p.add_argument("--observers", type=int, default=1, help="observers flying together")
     p.add_argument("--out", default="runs/bench")
     common(p)
     p.set_defaults(func=cmd_bench)

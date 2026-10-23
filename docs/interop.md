@@ -28,6 +28,32 @@ Two nodes register: the airborne cameras (`NODE_TYPE_CAMERA`) and, if fitted, th
 acoustic network (`NODE_TYPE_ACOUSTIC`). Keeping them separate lets the fusion node weigh
 each sensor on its own record, which is the point of the standard.
 
+## Tasking from the command node
+
+The camera node's registration declares a task definition (ICD 5.6): an area-of-interest
+region in the node's location type and one command, `LookAt`, of type
+`COMMAND_TYPE_LOOK_AT` with units `locationList` (ICD 5.6.8–5.6.9). A task that asks the
+node to look at a list of locations sends the observer to investigate their centre, and
+the node answers with a task acknowledgement (accepted, or rejected with a reason when
+the mission has been aborted).
+
+```python
+look = exporter.look_at(msg)  # (task_id, ENU position) or None
+exporter.task_ack(t, task_id, True)  # TASK_STATUS_ACCEPTED
+```
+
+The Task and TaskAck message tables (ICD 6.5–6.6) were not in the published text that was
+available; the field path read here (`task.task_id`, `task.command.look_at.locations`) and
+the acknowledgement fields (`task_id`, `task_status`, `reason`) are assumptions to align
+with the `.proto` files.
+
+## A jammed link
+
+With `link_loss_action: continue`, reports made while the link is down are held, with
+their measurement timestamps, and sent in order when it returns. Only the latest status
+report per node is kept, since a stale status is no use late. The number sent late is
+one of the benchmark results.
+
 ## Mapping decisions
 
 * **Coordinates.** `Location` in `UTM_M` on `WGS84_G`: easting, northing and altitude in
@@ -58,8 +84,8 @@ each sensor on its own record, which is the point of the standard.
 * **Taxonomy.** Class names (`UAV`, `Bird`) are placeholders. The ICD's taxonomy appendix
   is where the agreed names live.
 * **Conformance.** No run against the SAPIENT test harness or a fusion node.
-* **Tasking.** Kestrel accepts no SAPIENT `Task` messages; tasking is by natural language
-  through its own planner.
+* **Tasking.** Only `LOOK_AT` is accepted. Mode changes, detection thresholds and region
+  filters are not.
 
 ## Sources
 
