@@ -52,4 +52,8 @@ traffic budget is spent, no further yields start at all.
 
 ## Result
 
-See the README results matrix for the re-run sets.
+On the published set (seeds 4000–4023), camera plus acoustic network: no run inside
+12 m (closest 12.1 m), 20 of 24 missions completed and 4 returned home early for
+traffic, all landed at home. With the camera alone on the same encounters: 1 run inside
+12 m (7.7 m), 22 completed, 2 returned early. Sound buys separation and costs some
+mission time, because an unconfirmed cue has no altitude.

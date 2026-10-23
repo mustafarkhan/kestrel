@@ -13,7 +13,7 @@ controls. Every setpoint passes an independent safety monitor that no planner, l
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
-🎬 **[Project video](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
+🎬 **[Project video (3 min 20 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
 rejected unsafe plan, a closed-loop flight with birds and acoustic cueing, bird-versus-drone on real rendered pixels,
 SAPIENT output, the same code flying ArduCopter SITL, and the measured results against a no-avoidance baseline.
 Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
@@ -21,7 +21,7 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 | | how | measured |
 |---|---|---|
 | **Plan from language** | local LLM (Ollama) constrained to a JSON Schema, re-validated, one repair round, deterministic fallback; stop/abort/land bypass the model | malformed, invented-site and garbage outputs all rejected in tests; same plan with or without a model |
-| **Check before flight** | geofence, altitude band, speed, standoff vs. separation, battery energy with a traffic contingency | no benchmark mission exceeded its energy estimate |
+| **Check before flight** | geofence, altitude band, speed, standoff vs. separation, battery energy with a traffic contingency | 7 of 216 benchmark runs used more than the estimate (worst 1.2×, two intruders giving way); none used more than 27 of the 62 Wh usable |
 | **See other aircraft** | small-target sky detector on rendered frames: black top-hat, robust threshold, horizon mask, darker-than-sky test | 0.35 m drone: every frame to 45 m, about half at 60 m |
 | **Tell birds from drones** | wing-beat flicker in the track's brightness, scored against sensor noise | held out: no drone called a bird; 73% of flapping birds rejected; gliding birds not ([0009](docs/decisions/0009-birds.md)) |
 | **Hear what the camera cannot see** | ground microphone grid, 2° bearings, triangulated fixes that point the camera and widen the keep-out | see the results matrix |
@@ -99,11 +99,24 @@ exists for drone-to-drone well clear); an **encounter is detected** if the intru
 before it first comes within 30 m, after the Amazon Prime Air AOT benchmark; a **false alarm** is a track reported
 as a drone that never corresponds to one.
 
-RESULTS_TABLE
+| configuration | runs inside 12 m (entries) | closest approach | encounters detected 3 s before 30 m | false alarms per flight hour | missions completed (returned early for traffic) |
+|---|---|---|---|---|---|
+| no avoidance (baseline) | 18/24 (23) | 3.6 m | 18/24 | 0.0 | 24/24 (0) |
+| one camera | 1/24 (1) | 7.7 m | 18/24 | 1.2 | 22/24 (2) |
+| camera + acoustic cueing | 0/24 (0) | 12.1 m | 21/24 | 0.0 | 20/24 (4) |
+| five-camera ring | 1/24 (1) | 12.0 m | 21/24 | 1.2 | 23/24 (1) |
+| 4 birds, no classifier | 1/24 (2) | 8.9 m | 17/24 | 16.8 | 23/24 (1) |
+| 4 birds + classifier | 1/24 (1) | 11.4 m | 18/24 | 4.8 | 24/24 (0) |
+| two intruders | 15/24 (26) | 1.0 m | 11/24 | 5.6 | 22/24 (2) |
+| two intruders, no avoidance | 20/24 (30) | 1.3 m | 16/24 | 2.1 | 24/24 (0) |
+| two intruders, camera + acoustic | 4/24 (5) | 3.7 m | 15/24 | 2.3 | 12/24 (12) |
 
-BIRDS_TABLE
+| birds in the area | bird tracks | bird tracks reported as a drone | drone tracks reported as a drone |
+|---|---|---|---|
+| 4 birds, no classifier | 27 | 27 | 85/85 |
+| 4 birds + classifier | 26 | 8 | 84/96 |
 
-RISK_SENTENCE
+With one intruder, avoidance with one camera has a **risk ratio of 0.06**: 1 of 24 runs lost well clear, against 18 of 24 flying the same encounters without avoidance. Each added layer is measured on the same encounters. With two intruders the ratio is 0.75 (15 against 20 of 24), because one forward camera cannot watch two aircraft; the acoustic network brings it to 4 of 24, at the cost of 12 missions ending early for traffic ([0013](docs/decisions/0013-two-intruders.md)). With birds in the area, the classifier cuts false alarms from 16.8 to 4.8 per flight hour. 8 of 26 bird tracks were still reported as drones (a gliding bird shows no wing-beat; [0009](docs/decisions/0009-birds.md)). 12 of 96 drone tracks were never reported as drones, being too faint or brief to classify; the safety monitor kept clear of them all the same.
 
 Reproduce any row with the command in [docs/results/matrix.json](docs/results/matrix.json); per-run rows are in
 `docs/results/<set>/results.csv`. A test fails CI if these tables and the committed results disagree.
@@ -162,7 +175,7 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | job | what | runs |
 |---|---|---|
 | `lint` | ruff, ruff format, mypy `--strict` | every push |
-| `unit` | TEST_COUNT tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, SAPIENT message fields and UTM against PROJ, LLM planner against a local HTTP server | Python 3.11, 3.12, 3.13 |
+| `unit` | 90 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, SAPIENT message fields and UTM against PROJ, LLM planner against a local HTTP server | Python 3.11, 3.12, 3.13 |
 | `closed-loop` | full-stack simulations: detect, track and keep separation; operator abort; link-loss failsafe; rejected plans never fly | every push |
 | `sitl` | builds ArduCopter 4.6.3 SITL (cached) and flies a mission through GUIDED mode | every push |
 

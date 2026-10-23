@@ -289,7 +289,7 @@ def _caption(beh: str, t: float, events: dict[str, float], yielding: bool, cue_o
     if yielding:
         return "Giving way: the planned path would pass too close to a contact, so hold the standoff instead"
     if cue_only:
-        return "Acoustic cue: ground microphones hear an aircraft the camera has not seen; the camera turns to it"
+        return "Acoustic cue: microphones hear an aircraft the camera has not seen; it is kept clear of until seen"
     if beh == "takeoff":
         return "Take off to 25 m"
     if beh == "survey" and t < t_int:
@@ -830,8 +830,14 @@ def slide_results(matrix: dict[str, Any]) -> list[Image.Image]:
                     fill=AQUA,
                     font=sans(25, "SemiBold"),
                 )
-                d.text((120, y + 62), "Every number is reproducible with kestrel bench; CI checks the README against them.",
-                       fill=INK2, font=sans(18))  # fmt: skip
+                rr2 = matrix.get("risk_ratio_two")
+                d.text(
+                    (120, y + 62),
+                    f"Two intruders: {rr2:.2f}, because one camera cannot watch both (decision 0013). "
+                    "All numbers: kestrel bench; CI checks them.",
+                    fill=INK2,
+                    font=sans(18),
+                )
         footer(d, "12 m well clear is Kestrel's own: no standard exists for drone-to-drone encounters")
         return im
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kestrel-uas"
-version = "0.1.0"
+version = "0.2.0"
 description = "Language-tasked aerial observer: natural-language missions, air-to-air detection and tracking of small UAS, and a runtime safety monitor. Simulation-first, ArduPilot over MAVLink."
 readme = "README.md"
 requires-python = ">=3.11"

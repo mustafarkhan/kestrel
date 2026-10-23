@@ -83,8 +83,19 @@ the camera, so aspect matters as much as range.
 
 ## Closed-loop result
 
-See the README results matrix (`birds, classifier off` against `birds, classifier on`)
-and `docs/results/`.
+On the published encounter set (seeds 4000–4023) with four birds in the area, one
+forward camera:
+
+| | classifier off | classifier on |
+|---|---|---|
+| false alarms per flight hour | 16.8 | 4.8 |
+| bird tracks reported as a drone | 27 of 27 | 8 of 26 |
+| drone tracks reported as a drone | 85 of 85 | 84 of 96 |
+| runs inside 12 m of an intruder | 1/24 | 1/24 |
+
+The 12 drone tracks never reported as drones were too faint or too brief for an
+opinion; they were kept clear of like every other track. Birds did not cost separation
+from the intruders. The classifier was not tuned on these encounters.
 
 ## What would do better
 

@@ -75,7 +75,7 @@ def main(prefix: str) -> None:
             shutil.copy(src / "summary.json", dst / "summary.json")
             shutil.copy(src / "results.csv", dst / "results.csv")
         else:  # merge parts
-            parts = sorted(Path(prefix).parent.glob(f"{Path(prefix).name}_{key}_*"))
+            parts = sorted(p for p in Path(prefix).parent.glob(f"{Path(prefix).name}_{key}_*") if p.is_dir())
             if not parts:
                 print(f"skipping {key}: no results")
                 continue
