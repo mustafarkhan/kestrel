@@ -49,6 +49,19 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 > Kestrel is a sensor: it detects, tracks, keeps clear and reports. It has no intercept, engagement or targeting
 > function, and its reports describe airspace for its protection.
 
+## Next: deployment and field testing
+
+Simulation was the first gate. The next phase is deploying and testing Kestrel with our own systems and our
+defence-technology partners:
+
+- **Real sensor data.** The detector, tracker and bird/drone classifier evaluated on real air-to-air footage and
+  real acoustic cues, so the published numbers can be checked against the field.
+- **Multi-sensor network fusion.** Kestrel reporting alongside fixed sensors into one fusion node over SAPIENT,
+  and taking `LOOK_AT` tasks from it.
+- **Field trials.** The sensor-node mission flown on a real airframe against a cooperating target drone.
+
+Results from that phase will be published here in the same way: measured, reproducible, with what did not work.
+
 ## Quick start
 
 ```bash
@@ -228,8 +241,8 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 
 ## Limitations
 
-- **Simulation, not flight.** No real airframe, no real footage. The first roadmap item is evaluating the detector
-  on public real air-to-air data; after that, flights with a cooperating target drone.
+- **Simulation, not flight.** No real airframe, no real footage yet. Deployment and field testing are the next
+  phase ([above](#next-deployment-and-field-testing)).
 - **Two observers** share a perfect datalink in simulation; its loss, latency and bandwidth are not modelled. A
   second observer doubles the number of aircraft that can come close to an intruder, and the table shows it.
 - **Jammed-link autonomy** is bounded (2 minutes by default) and covers the ground link only: navigation still
