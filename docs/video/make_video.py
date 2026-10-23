@@ -135,13 +135,13 @@ def slide_title() -> list[Image.Image]:
         im = blank()
         d = ImageDraw.Draw(im)
         d.text((96, 208), "Kestrel", fill=INK, font=sans(92, "Bold"))
-        d.text((100, 324), "a language-tasked aerial observer for small drones", fill=INK2, font=sans(34))
+        d.text((100, 324), "an airborne sensor node for counter-drone defence", fill=INK2, font=sans(34))
         d.line([(100, 394), (100 + 380 * min(1, t / 1.2), 394)], fill=BLUE, width=4)
         for i, line in enumerate(
             [
-                "plain-English missions  ·  air-to-air detection, tracking and keep-clear  ·  runtime safety monitor",
-                "acoustic cueing  ·  bird/drone discrimination  ·  SAPIENT (NATO C-UAS) reports",
-                "simulation-first  ·  ArduPilot over MAVLink, flown on ArduCopter SITL",
+                "cued by ground sensors  ·  detects, classifies and tracks drones  ·  never engages",
+                "SAPIENT reports and tasking  ·  works through a jammed link  ·  two nodes fuse one track",
+                "tasked in plain English  ·  simulation-first, flown on ArduCopter SITL",
             ]
         ):
             d.text((100, 424 + 34 * i), line, fill=MUTED, font=sans(22))
