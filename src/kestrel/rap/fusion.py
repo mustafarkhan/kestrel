@@ -107,6 +107,7 @@ class RapTrack:
     remote_id: str | None = None
     rid_pos: Vec | None = None  # last position the drone broadcast, and its stated error
     rid_r: Vec | None = None
+    rid_t: float = -math.inf  # when it was last heard
     rf_protocol: str | None = None
     noncoop_t: float = -math.inf  # last non-cooperative report that agreed with the broadcast
     camera_t: float = -math.inf
@@ -313,7 +314,7 @@ class FusionNode:
             self._by_source[(r.node_id, r.object_id)] = tr
         tr.node_types.add(r.node_type)
         if r.remote_id is not None:
-            tr.remote_id, tr.rid_pos, tr.rid_r = r.remote_id, r.pos, r.r_pos
+            tr.remote_id, tr.rid_pos, tr.rid_r, tr.rid_t = r.remote_id, r.pos, r.r_pos, r.t
         elif self._agrees_with_broadcast(tr, r):
             tr.noncoop_t = max(tr.noncoop_t, r.t)
         if r.node_type == "NODE_TYPE_CAMERA":
@@ -422,8 +423,8 @@ class FusionNode:
         for node, (kind, n, total) in b.evidence.items():
             _, n0, t0 = a.evidence.get(node, (kind, 0, 0.0))
             a.evidence[node] = (kind, n0 + n, t0 + total)
-        if a.remote_id is None:
-            a.remote_id, a.rid_pos, a.rid_r = b.remote_id, b.rid_pos, b.rid_r
+        if a.remote_id is None or b.rid_t > a.rid_t:
+            a.remote_id, a.rid_pos, a.rid_r, a.rid_t = b.remote_id, b.rid_pos, b.rid_r, b.rid_t
         a.llr = self._llr(a)
         a.rf_protocol = a.rf_protocol or b.rf_protocol
         a.noncoop_t = max(a.noncoop_t, b.noncoop_t)
@@ -446,6 +447,11 @@ class FusionNode:
             return tr.declared
         if not self.confirmed(tr):
             return "PENDING"
+        if tr.remote_id is not None and t - tr.rid_t > self.o.corroborate_s:
+            # The broadcast has stopped while other sensors still hold the track: the serial
+            # may belong to an aircraft this track no longer follows (two crossed paths), so
+            # it no longer vouches for it.
+            tr.remote_id = None
         if tr.remote_id is not None:
             if tr.remote_id in self.whitelist:
                 return "FRIEND" if t - tr.noncoop_t <= self.o.corroborate_s else "ASSUMED_FRIEND"
