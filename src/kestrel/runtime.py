@@ -22,7 +22,7 @@ from kestrel.config import Config, Scenario
 from kestrel.geofence import Geofence
 from kestrel.geometry import Vec
 from kestrel.interop.sapient import SapientExporter
-from kestrel.mission.executive import Context, Event, Executive, declared_drone
+from kestrel.mission.executive import CLASSIFY_STANDOFF_M, Context, Event, Executive, declared_drone
 from kestrel.mission.geometry import resolve_xy
 from kestrel.mission.llm import ChatBackend, MissionPlanner, PlanResult
 from kestrel.mission.parser import RuleParser, parse_emergency, parse_investigate
@@ -33,6 +33,7 @@ from kestrel.perception.camera import Camera, CameraPose
 from kestrel.perception.detector import Detection, SkyTargetDetector
 from kestrel.perception.render import SkyRenderer
 from kestrel.perception.tracker import MultiTargetTracker, TrackEstimate
+from kestrel.rap.loop import AirPicture
 from kestrel.safety.monitor import SafetyMonitor, SafetyRequest
 from kestrel.sim.birds import BirdState
 from kestrel.sim.world import SimWorld
@@ -218,6 +219,7 @@ def run(
     avoidance: bool = True,
     sapient: SapientExporter | None = None,
     sapient_tasks: list[tuple[float, dict[str, object]]] | None = None,
+    air_picture: AirPicture | None = None,
 ) -> RunResult:
     """Fly one closed-loop mission.
 
@@ -225,6 +227,10 @@ def run(
     against: same mission and traffic, but no contact handling, no yielding and no
     separation filtering. The ratio of separation losses with and without avoidance is the
     risk ratio.
+
+    ``air_picture`` runs a ground fusion node alongside the flight: ground sensors and
+    Kestrel's own SAPIENT reports build one picture, and the picture's ``LOOK_AT`` tasks
+    reach Kestrel like any other command-node tasking (over the same link).
     """
     plan, report = plan_and_validate(command, cfg, scenario, backend)
     world = SimWorld(cfg, scenario)
@@ -354,15 +360,18 @@ def run(
             loc = parse_investigate(text, rules)
             if loc is not None:
                 executive.request_investigate(resolve_xy(loc, scenario.world), t, "operator")
+        if air_picture is not None:
+            c2_tasks += [(t, task) for task in air_picture.tick(t, birds)]
         while link_ok and c2_tasks and c2_tasks[0][0] <= t:
             _, msg = c2_tasks.pop(0)
-            look = sapient.look_at(msg) if sapient is not None else None
+            look = sapient.look_at_detail(msg) if sapient is not None else None
             if look is not None and sapient is not None:
-                task_id, xy = look
+                task_id, xy, z_known = look
                 ok = executive.mission is not None and not executive.aborted
                 sapient.task_ack(t, task_id, ok, "" if ok else "mission aborted")
                 if ok:
-                    executive.request_investigate(xy, t, "C2 tasking (SAPIENT)")
+                    standoff = CLASSIFY_STANDOFF_M if z_known else None
+                    executive.request_investigate(xy, t, "C2 tasking (SAPIENT)", standoff)
         monitor.check_vehicle(st, link_ok)
         if monitor.latched is not SafetyRequest.NONE:
             executive.abort(monitor.latched, ctx, monitor.reasons[-1])

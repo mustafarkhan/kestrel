@@ -127,6 +127,25 @@ class SapientExporter:
     def _ulid(self, t: float) -> str:
         return ulid(int((self.opts.epoch_s + t) * 1000), self._rng)
 
+    def new_node_id(self) -> str:
+        """A fresh UUID v4 for another node sharing this exporter's frame and random stream."""
+        return self._uuid()
+
+    def new_ulid(self, t: float) -> str:
+        return self._ulid(t)
+
+    def timestamp(self, t: float) -> str:
+        return rfc3339(self.opts.epoch_s + t)
+
+    def sim_time(self, timestamp: str) -> float:
+        """Seconds since this exporter's epoch of an RFC 3339 timestamp (any fraction digits)."""
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return dt.timestamp() - self.opts.epoch_s
+
+    @property
+    def camera_node_id(self) -> str:
+        return self.camera.node_id
+
     def _emit(self, t: float, node: _Node, content_key: str, content: Message) -> None:
         msg = {"timestamp": rfc3339(self.opts.epoch_s + t), "node_id": node.node_id, content_key: content}
         if not self.link_ok:
@@ -214,6 +233,16 @@ class SapientExporter:
         is an assumption to align with the ``.proto`` files. The command type, LOOK_AT with a
         location list, is from the ICD's command definition (5.6.9).
         """
+        detail = self.look_at_detail(msg)
+        return None if detail is None else (detail[0], detail[1])
+
+    def look_at_detail(self, msg: Message) -> tuple[str, Vec, bool] | None:
+        """As :meth:`look_at`, plus whether the locations give a usable altitude.
+
+        A location whose ``z_error`` is under 15 m comes from a sensor that measured height
+        (a radar or a fused track); without one, the place is a vertical column, as an
+        acoustic or RF fix is.
+        """
         task = msg.get("task")
         if not isinstance(task, dict):
             return None
@@ -222,7 +251,8 @@ class SapientExporter:
         if not locs:
             return None
         pts = np.array([self.to_enu(loc) for loc in locs])
-        return str(task.get("task_id", "")), pts.mean(axis=0)
+        z_known = all(float(loc.get("z_error", math.inf)) < 15.0 for loc in locs)
+        return str(task.get("task_id", "")), pts.mean(axis=0), z_known
 
     def task_ack(self, t: float, task_id: str, accepted: bool, reason: str = "") -> None:
         content: Message = {

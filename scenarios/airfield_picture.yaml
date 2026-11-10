@@ -1,0 +1,45 @@
+# The airfield with a ground fusion node: a small radar on a mast at the hangar and a Remote ID
+# receiver build the picture with Kestrel. A radio-silent hostile multirotor (no control link
+# to hear, so RF detection is blind to it) loiters in the north field; one of our own drones
+# patrols, broadcasting a whitelisted Remote ID serial; birds share the sky. The radar sees all
+# of them but cannot tell drone from bird with confidence: the fusion node tasks Kestrel to look.
+name: airfield_picture
+seed: 7
+max_duration_s: 420
+world:
+  fence: [[-150, -150], [150, -150], [150, 150], [-150, 150]]
+  home: [0, 0, 0]
+  origin_lla: [60.30, 25.05, 20.0]
+  wind: {mean: [2.0, -1.0, 0.0], gust_sigma: 1.0}
+  sites:
+    north_field: {kind: rect, min_xy: [-60, 40], max_xy: [60, 120]}
+    tower: {kind: point, xy: [80, -40]}
+    lake: {kind: circle, center: [-70, -60], radius: 40}
+    hangar: {kind: point, xy: [-30, 10]}
+intruders:
+  - pattern: lemniscate
+    center: [20, 90, 30]
+    size: [40, 22]
+    speed: 4.0
+    appear_at_s: 60
+    rf_link: false
+    propulsion: quiet
+    radar_class_cue: 0.6
+  - pattern: orbit
+    center: [60, -60, 40]
+    size: [40, 0]
+    speed: 5.0
+    appear_at_s: 0
+    ingress_m: 0
+    role: friendly
+    remote_id: KST-FRIEND-0001
+    rf_protocol: friendly C2 link
+birds:
+  count: 3
+sensors:
+  radar: {xyz: [-30, 10, 6]}
+  remote_id: {xy: [-30, 10], range_m: 1000}
+  whitelist: [KST-FRIEND-0001]
+  protected:
+    hangar: {kind: point, xy: [-30, 10]}
+    tower: {kind: point, xy: [80, -40]}
