@@ -151,7 +151,7 @@ def test_a_whitelisted_serial_broadcast_from_the_wrong_place_is_not_a_friend() -
     assert "ASSUMED_FRIEND" in ids  # the phantom: a serial no independent sensor corroborates
 
 
-def test_a_cloned_serial_makes_the_uncorroborated_copy_suspect() -> None:
+def test_a_cloned_serial_is_never_shown_as_friend() -> None:
     cfg = SensorNetConfig(radar=RadarConfig(), remote_id=RemoteIdConfig(), whitelist=["KST-FRIEND-0001"])
     off = np.array([250.0, 300.0, 0.0])
     seq = [
@@ -166,7 +166,7 @@ def test_a_cloned_serial_makes_the_uncorroborated_copy_suspect() -> None:
     ]
     fu = _fuse(seq, cfg, cfg.whitelist)
     by_id = {tr.identity for tr in fu.picture(39.0) if tr.remote_id == "KST-FRIEND-0001"}
-    assert by_id == {"FRIEND", "SUSPECT"}
+    assert by_id == {"ASSUMED_FRIEND", "SUSPECT"}  # neither copy is trusted while both exist
 
 
 def test_hostile_is_only_ever_a_human_decision() -> None:

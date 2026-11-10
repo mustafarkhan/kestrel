@@ -24,8 +24,9 @@ runs on simulated sensors and on recorded traffic from real ones. Per report it:
    corroborated by a non-cooperative sensor (otherwise *assumed friend*, so a spoofed
    serial cannot make a phantom friendly); *neutral* for a compliant civil drone or a
    bird; *suspect* for an unidentified drone inside or heading into a protected area;
-   *unknown* otherwise. **Hostile is never set automatically**: it is a human decision,
-   recorded with :meth:`FusionNode.declare`.
+   *unknown* otherwise. A serial broadcast from two places at once is a clone: no copy
+   is shown as friend, and the uncorroborated copies are suspect. **Hostile is never set
+   automatically**: it is a human decision, recorded with :meth:`FusionNode.declare`.
 
 It also decides which track most needs a closer look and writes a SAPIENT ``LOOK_AT``
 task for the airborne camera node: the cue-to-confirm loop run from the fusion node.
@@ -357,8 +358,10 @@ class FusionNode:
         cloned = self._cloned_serials(t)
         for tr in self.tracks:
             tr.identity = self._identity(tr, t)
-            if tr.remote_id in cloned and tr.identity == "ASSUMED_FRIEND":
-                tr.identity = "SUSPECT"  # an uncorroborated copy of a serial seen elsewhere
+            if tr.remote_id in cloned and tr.declared is None:
+                # One serial in two places: at most one is genuine, and Remote ID cannot say
+                # which. No copy is shown as friend; the uncorroborated ones are suspect.
+                tr.identity = "ASSUMED_FRIEND" if tr.identity == "FRIEND" else "SUSPECT"
 
     def _cloned_serials(self, t: float) -> set[str]:
         """Serials broadcast from two places at once: at most one of them is genuine."""
