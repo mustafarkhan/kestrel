@@ -347,3 +347,28 @@ def test_a_resent_tasking_updates_the_look_instead_of_queueing(cfg: Config, airf
     ex.request_investigate(np.array([500.0, 60.0]), 2.0, "C2")  # far: a new look, queued
     ex.request_investigate(np.array([520.0, 60.0]), 3.0, "C2")  # supersedes the queued one
     assert len(ex.requests) == 1 and math.isclose(float(ex.requests[0][1][0]), 520.0)
+
+
+def _picture_for(include: set[str] | None) -> object:
+    from kestrel.rap.loop import AirPicture
+
+    sc = load_scenario(ROOT / "scenarios" / "airfield_picture.yaml")
+    g = SapientExporter(SapientOptions(origin_lla=sc.world.origin_lla, seed=1, altitude_band_m=(0.0, 60.0)))
+    ap = AirPicture(sc, g, include=include, tasking=False)
+    for k in range(80):
+        ap.tick(0.5 * k, [])
+    return ap
+
+
+def test_the_picture_shares_its_3d_tracks_with_kestrel_as_traffic() -> None:
+    """Kestrel's camera sees only ahead; the radar's tracks keep it clear of the rest."""
+    ap = _picture_for({"radar"})
+    traffic = ap.traffic  # type: ignore[attr-defined]
+    assert traffic, "the radar holds the drones over the airfield"
+    for tr in traffic:
+        assert tr.ident <= -1000  # never collides with Kestrel's own track or cue ids
+        assert tr.cov[2, 2] < 15.0**2
+    # a track held only by acoustic or RF fixes is a column: it says nothing about height
+    for tr in ap.fusion.tracks:  # type: ignore[attr-defined]
+        tr.p[2, 2] = 30.0**2
+    assert not ap._traffic(40.0)  # type: ignore[attr-defined]

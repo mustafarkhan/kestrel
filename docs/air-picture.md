@@ -83,6 +83,13 @@ traffic (`kestrel fuse`).
   aircraft. A look ends when Kestrel's camera has reported the track and the picture can say
   what it is, when the track is gone, or after 75 s.
 
+* **Traffic for Kestrel.** The picture is also handed back to Kestrel: every confirmed track
+  the node holds in three dimensions (vertical error under 15 m, horizontal under 30 m, so a
+  radar or fused track, not an acoustic or RF column) goes to Kestrel's separation filter
+  alongside its own camera tracks, with the time of its last update so the keep-out widens
+  with its age. Traffic older than 5 s is dropped. It can only push Kestrel away from an
+  aircraft, never draw it towards one.
+
 What Kestrel does with a task: a location with a measured altitude (z error under 15 m, so a
 radar or fused track) is approached to 30 m, the follow distance, so the camera can classify
 it; a column (an acoustic or RF fix) keeps the 45 m standoff. A re-sent position for the look
@@ -124,4 +131,10 @@ Filled in from `docs/results/picture/` and `docs/results/loop/`; see the README 
   shown as friend. The clone rule only helps while ours is also up. A fielded system needs
   authenticated friendly-force tracking from its own ground control, not a broadcast anyone
   can copy.
+* The picture's traffic reaches Kestrel's separation filter directly in simulation, after the
+  same link check as tasking. On the wire it would be the fusion node's own detection reports
+  addressed to Kestrel; that encoding is not written yet.
+* Kestrel itself is not in the ground sensors' truth, so the radar never tracks it. A fielded
+  fusion node must recognise its own airborne node (from its status reports) and keep it out of
+  the traffic it sends back.
 * No real sensor data yet. `kestrel fuse` is the entry point for it.

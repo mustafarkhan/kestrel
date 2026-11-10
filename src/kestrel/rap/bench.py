@@ -106,6 +106,19 @@ def _loop_one(args: tuple[Any, Any, bool]) -> dict[str, Any]:
     return {"scenario": sc.name, "tasking": tasking, **{k: m.get(k) for k in keep}, **ap.summary()}
 
 
+def summarise_loop(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    agg = aggregate([{k: v for k, v in r.items() if k != "scenario"} | {"seed": 0, "spoofer": False}
+                     for r in rows])  # fmt: skip
+    classify = [r["track_to_uav_s"] for r in rows if r["track_to_uav_s"] is not None]
+    agg["track_to_uav_median_s"] = round(float(np.median(classify)), 1) if classify else None
+    agg["track_to_uav_p90_s"] = round(float(np.percentile(classify, 90)), 1) if classify else None
+    agg["completed_runs"] = sum(bool(r["completed"]) for r in rows)
+    agg["runs_with_lowc"] = sum((r["lowc_events"] or 0) > 0 for r in rows)
+    seps = [r["min_separation_m"] for r in rows if r["min_separation_m"] is not None]
+    agg["closest_approach_m"] = round(float(min(seps)), 1) if seps else None
+    return agg
+
+
 def run_loop_benchmark(
     cfg: Any,
     base: Any,
@@ -114,26 +127,31 @@ def run_loop_benchmark(
     out_dir: Path,
     workers: int = 2,
     modes: tuple[bool, ...] = (False, True),
+    first: int = 0,
 ) -> dict[str, Any]:
-    """Fly encounters with the fusion node tasking Kestrel (``True``) or only listening (``False``)."""
+    """Fly encounters ``first`` to ``first + n - 1`` with the fusion node tasking Kestrel
+    (``True``) or only listening (``False``).
+
+    Each call writes its rows to ``{mode}-{first:03d}.json``, so a long benchmark can be run in
+    parts (in parallel, or one after another), then merges every part present into
+    ``{mode}.json`` and ``summary_{mode}.json``.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     summary: dict[str, Any] = {}
     with ProcessPoolExecutor(max_workers=workers) as pool:
         for tasking in modes:
             name = "tasked" if tasking else "untasked"
-            jobs = [(cfg, loop_scenario(base, i, seed0), tasking) for i in range(n)]
+            jobs = [(cfg, loop_scenario(base, i, seed0), tasking) for i in range(first, first + n)]
             rows = list(pool.map(_loop_one, jobs))
-            (out_dir / f"{name}.json").write_text(json.dumps(rows, indent=1))
-            agg = aggregate([{k: v for k, v in r.items() if k != "scenario"} | {"seed": 0, "spoofer": False}
-                             for r in rows])  # fmt: skip
-            classify = [r["track_to_uav_s"] for r in rows if r["track_to_uav_s"] is not None]
-            agg["track_to_uav_median_s"] = round(float(np.median(classify)), 1) if classify else None
-            agg["track_to_uav_p90_s"] = round(float(np.percentile(classify, 90)), 1) if classify else None
-            agg["completed_runs"] = sum(bool(r["completed"]) for r in rows)
-            agg["runs_with_lowc"] = sum((r["lowc_events"] or 0) > 0 for r in rows)
+            (out_dir / f"{name}-{first:03d}.json").write_text(json.dumps(rows, indent=1))
+            merged = [r for part in sorted(out_dir.glob(f"{name}-*.json"))
+                      for r in json.loads(part.read_text(encoding="utf-8"))]  # fmt: skip
+            merged.sort(key=lambda r: str(r["scenario"]))
+            (out_dir / f"{name}.json").write_text(json.dumps(merged, indent=1))
+            agg = summarise_loop(merged)
+            (out_dir / f"summary_{name}.json").write_text(json.dumps(agg, indent=1))
             summary[name] = agg
             print(name, json.dumps(agg), flush=True)
-    summary["_meta"] = {"seeds": [seed0, seed0 + n - 1], "mission": LOOP_MISSION}
-    for name, agg in summary.items():
-        (out_dir / f"summary_{name.strip('_')}.json").write_text(json.dumps(agg, indent=1))
+    meta = {"seeds": [seed0, seed0 + first + n - 1], "mission": LOOP_MISSION}
+    (out_dir / "summary_meta.json").write_text(json.dumps(meta, indent=1))
     return summary

@@ -143,10 +143,22 @@ def cmd_bench(args: argparse.Namespace) -> int:
 
 
 def cmd_picture(args: argparse.Namespace) -> int:
-    from kestrel.rap.bench import CONFIGS, run_picture_benchmark
+    from kestrel.rap.bench import CONFIGS, run_loop_benchmark, run_picture_benchmark
 
+    if args.loop:
+        cfg = load_config(args.config)
+        base = load_scenario(args.scenario or "scenarios/airfield_picture.yaml")
+        modes = {"both": (False, True), "on": (True,), "off": (False,)}[args.tasking]
+        seed0 = 8000 if args.seed0 is None else args.seed0
+        out = Path(args.out or "runs/loop")
+        summary = run_loop_benchmark(cfg, base, args.runs, seed0, out, args.jobs, modes, args.first)
+        print(json.dumps(summary, indent=2))
+        return 0
     names = args.only.split(",") if args.only else list(CONFIGS)
-    summary = run_picture_benchmark(args.runs, args.seed0, Path(args.out), names, workers=args.jobs)
+    seed0 = 7000 if args.seed0 is None else args.seed0
+    summary = run_picture_benchmark(
+        args.runs, seed0, Path(args.out or "runs/picture"), names, workers=args.jobs
+    )
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -240,10 +252,15 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("picture", help="air-picture benchmark: each ground sensor alone and all fused")
     p.add_argument("--runs", type=int, default=24)
-    p.add_argument("--seed0", type=int, default=7000)
+    p.add_argument("--seed0", type=int, help="first seed (default 7000; 8000 with --loop)")
     p.add_argument("--jobs", type=int, default=2)
     p.add_argument("--only", help="comma-separated configurations (default: all)")
-    p.add_argument("--out", default="runs/picture")
+    p.add_argument("--out", help="output folder (default runs/picture; runs/loop with --loop)")
+    p.add_argument("--loop", action="store_true", help="fly Kestrel with the picture: listening, and tasked")
+    p.add_argument("--tasking", choices=("both", "on", "off"), default="both", help="with --loop")
+    p.add_argument("--first", type=int, default=0, help="with --loop: first encounter, to run in parts")
+    p.add_argument("--config", default="configs/birds.yaml", help="with --loop")
+    p.add_argument("--scenario", help="with --loop (default scenarios/airfield_picture.yaml)")
     p.set_defaults(func=cmd_picture)
 
     p = sub.add_parser("fuse", help="fuse a recorded SAPIENT log (JSON lines) into an air picture")

@@ -51,6 +51,7 @@ the picture, and lets it task Kestrel.
 | Tasks sent for tracks outside the area | Kestrel flew to the fence chasing birds outside it and timed out | tasks only for tracks inside the area the airborne node may fly |
 | Re-sent positions queued as new looks | stale positions piled up; Kestrel left the drone it was classifying to visit old ones | a re-sent position updates the look under way; a newer task replaces one still waiting |
 | A look ended when the camera first saw the track | Kestrel left before its classifier had enough frames | a look ends when the picture can say what the track is |
+| Kestrel avoided only what its own camera saw | sent to look at one aircraft, it flew under the hostile drone the radar was holding 10 m above it, out of the camera's view: 1 of 24 tasked runs inside 12 m | the picture's 3-D tracks are handed to Kestrel's separation filter as traffic; the run's closest approach went from 10.0 m to 23.8 m, and every encounter was flown again |
 | Field names taken from the ICD text | registration, status location and the look-at path did not parse against the published schema | aligned with Dstl's protobuf; conformance test |
 
 ## Results

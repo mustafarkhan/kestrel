@@ -96,3 +96,30 @@ def test_readme_simulation_examples_pass_validation() -> None:
         scen = load_scenario(ROOT / (scen_path or "scenarios/airfield.yaml"))
         _, report = plan_and_validate(text, cfg, scen)
         assert not report.errors, (text, report.errors)
+
+
+def test_air_picture_rows_match_the_results() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    pic = json.loads((RESULTS / "picture" / "summary.json").read_text(encoding="utf-8"))
+    rows = collect.PICTURE_ROWS
+    missing = [key for key, label in rows if collect.picture_row(label, pic[key]) not in readme]
+    for key, label in collect.LOOP_ROWS:
+        s = json.loads((RESULTS / "loop" / f"summary_{key}.json").read_text(encoding="utf-8"))
+        if collect.loop_row(label, s) not in readme:
+            missing.append(key)
+    assert not missing, f"README out of date with docs/results/picture and loop: {missing}"
+
+
+def test_air_picture_summaries_match_per_run_rows() -> None:
+    for key, _ in collect.PICTURE_ROWS:
+        rows = json.loads((RESULTS / "picture" / f"{key}.json").read_text(encoding="utf-8"))
+        s = json.loads((RESULTS / "picture" / "summary.json").read_text(encoding="utf-8"))[key]
+        assert s["runs"] == len(rows) == 24, key
+        seed0 = collect.PICTURE_SEED0
+        assert sorted(r["seed"] for r in rows) == list(range(seed0, seed0 + 24)), key
+    for key, _ in collect.LOOP_ROWS:
+        rows = json.loads((RESULTS / "loop" / f"{key}.json").read_text(encoding="utf-8"))
+        s = json.loads((RESULTS / "loop" / f"summary_{key}.json").read_text(encoding="utf-8"))
+        assert s["runs"] == len(rows) == 24, key
+        assert s["runs_with_lowc"] == sum((r["lowc_events"] or 0) > 0 for r in rows), key
+        assert s["hostiles_classified"] == sum(r["hostiles_classified"] for r in rows), key

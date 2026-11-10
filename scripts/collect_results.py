@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -221,6 +222,8 @@ def collect_picture(src: Path = ROOT / "runs") -> None:
         dst = ROOT / "docs" / "results" / name
         dst.mkdir(parents=True, exist_ok=True)
         for f in sorted((src / name).glob("*.json")):
+            if re.search(r"-\d{3}\.json$", f.name):
+                continue  # a part of a benchmark run in parts; the merged file is copied
             shutil.copy(f, dst / f.name)
     print("copied picture and loop results")
 
@@ -240,11 +243,13 @@ def picture_row(label: str, s: dict[str, Any]) -> str:
 
 
 def loop_row(label: str, s: dict[str, Any]) -> str:
+    """One README row for Kestrel flying with the picture; tests/test_published_results.py checks it."""
     med, p90 = s.get("track_to_uav_median_s"), s.get("track_to_uav_p90_s")
     timing = "n/a" if med is None else f"{med:.0f} s / {p90:.0f} s"
     return (
-        f"| {label} | {s['hostiles_classified']:.0f}/{s['runs']} | {timing} | {_pct(s['drone_as_bird'])} "
-        f"| {s['completed_runs']}/{s['runs']} | {s['runs_with_lowc']}/{s['runs']} |"
+        f"| {label} | {s['hostiles_classified']:.0f}/{s['runs']} | {timing} | {_pct(s['drone_as_uav'])} "
+        f"| {_pct(s['drone_as_bird'])} | {s['looks']:.1f} | {s['completed_runs']}/{s['runs']} "
+        f"| {s['runs_with_lowc']}/{s['runs']} | {s['closest_approach_m']:.1f} m |"
     )
 
 
@@ -272,9 +277,12 @@ def print_picture_tables() -> None:
         "with Kestrel",
         "hostile drones classified as UAV",
         "first track to UAV (median / p90)",
+        "drone-time shown as UAV",
         "drone-time shown as bird",
+        "looks flown per mission",
         "missions completed",
         "runs inside 12 m",
+        "closest approach",
     ]
     print("| " + " | ".join(head) + " |")
     print("|" + "---|" * len(head))

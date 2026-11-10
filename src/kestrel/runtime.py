@@ -39,6 +39,10 @@ from kestrel.sim.birds import BirdState
 from kestrel.sim.world import SimWorld
 from kestrel.vehicle.sim_vehicle import SimVehicle
 
+# Picture traffic older than this is dropped (a long link loss); younger traffic is kept and the
+# separation filter widens its keep-out with the age.
+TRAFFIC_MAX_AGE_S = 5.0
+
 
 @dataclass
 class Frame:
@@ -259,6 +263,7 @@ def run(
     acoustic_fixes: list[AcousticFix] = []
     cmds = sorted(operator_commands or [])
     c2_tasks = sorted(sapient_tasks or [], key=lambda x: x[0])
+    traffic: list[TrackEstimate] = []  # the air picture's 3-D tracks, last received over the link
     rules = RuleParser(list(scenario.world.sites))
     first_cue_t: float | None = None
     first_confirm_t: float | None = None
@@ -362,6 +367,9 @@ def run(
                 executive.request_investigate(resolve_xy(loc, scenario.world), t, "operator")
         if air_picture is not None:
             c2_tasks += [(t, task) for task in air_picture.tick(t, birds)]
+            if link_ok:  # the picture's traffic reaches Kestrel over the same link
+                traffic = list(air_picture.traffic)
+            traffic = [tr for tr in traffic if t - tr.last_hit_t < TRAFFIC_MAX_AGE_S]
         while link_ok and c2_tasks and c2_tasks[0][0] <= t:
             _, msg = c2_tasks.pop(0)
             look = sapient.look_at_detail(msg) if sapient is not None else None
@@ -376,7 +384,7 @@ def run(
         if monitor.latched is not SafetyRequest.NONE:
             executive.abort(monitor.latched, ctx, monitor.reasons[-1])
         sp = executive.step(ctx)
-        dec = monitor.filter(st, sp, tracks + cues, executive.low_altitude_ok)
+        dec = monitor.filter(st, sp, tracks + cues + traffic, executive.low_altitude_ok)
         if dec.setpoint is not None:
             vehicle.set_setpoint(dec.setpoint)
         if sapient is not None:
