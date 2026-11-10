@@ -1540,6 +1540,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(ROOT / "docs" / "video" / "kestrel_demo.mp4"))
     args = ap.parse_args()
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     cfg_path = ROOT / "configs" / "default.yaml"
     scen_path = ROOT / "scenarios" / "airfield.yaml"
     demo_cfg = load_config(ROOT / "configs" / "full.yaml")
