@@ -227,6 +227,15 @@ class IntruderConfig(_Strict):
     # speed) instead of appearing out of nowhere next to the observer.
     ingress_m: float = 150.0
     span_m: float = 0.35
+    # What other sensors can see of it (used by the ground sensor network, `rap/`):
+    role: Literal["hostile", "friendly", "civil"] = "hostile"  # ground truth, never shown to sensors
+    rf_link: bool = True  # a radio control or video link an RF detector can hear
+    rf_protocol: str = "unknown"
+    remote_id: str | None = None  # serial broadcast as EU/ASTM direct Remote ID, if any
+    remote_id_offset_m: XYZ = (0.0, 0.0, 0.0)  # a spoofer reports a position this far from its own
+    propulsion: Literal["electric", "combustion", "quiet"] = "electric"
+    rcs_m2: float = 0.01  # radar cross-section; small multirotor
+    radar_class_cue: float = 0.7  # how drone-like its micro-Doppler looks to a radar classifier (0..1)
 
 
 class BirdConfig(_Strict):
@@ -244,6 +253,76 @@ class BirdConfig(_Strict):
     flap_hz: XY = (3.0, 6.0)
     glide_fraction: float = 0.3  # share of time spent gliding
     mean_bout_s: float = 2.5  # mean length of a flapping bout
+    rcs_m2: XY = (0.003, 0.02)  # radar cross-section range: as large as a small drone's
+    radar_class_cue: float = 0.3  # wing-beat micro-Doppler looks less drone-like than rotors
+
+
+class RadarConfig(_Strict):
+    """A small ground surveillance radar of the kind fielded for counter-UAS.
+
+    Detection follows the radar equation with a Swerling I target: signal-to-noise falls
+    with the fourth power of range and rises with radar cross-section, and the chance of a
+    detection per scan is ``pfa ** (1 / (1 + snr))``.
+    """
+
+    xyz: XYZ = (0.0, 0.0, 6.0)  # antenna position (mast height above home)
+    scan_s: float = 1.0
+    ref_range_m: float = 1500.0  # range at which a target of ``ref_rcs_m2`` has ``ref_snr_db``
+    ref_rcs_m2: float = 0.01
+    ref_snr_db: float = 13.0
+    pfa: float = 1e-6
+    min_elevation_deg: float = 0.5  # below this the target is in ground clutter / masked
+    # Trees, buildings and terrain: low targets beyond a short range are hidden in clutter.
+    masked_below_m: float = 20.0  # AGL
+    masked_beyond_m: float = 400.0
+    range_sigma_m: float = 3.0
+    azimuth_sigma_deg: float = 0.5
+    elevation_sigma_deg: float = 1.0
+    confirm_m: int = 2  # m of n detections start a radar track
+    confirm_n: int = 3
+    drop_after_misses: int = 3  # a radar track that misses this many scans ends (a new id follows)
+    false_tracks_per_hour: float = 30.0  # clutter, vehicles, wind turbines that pass its own filters
+    class_noise: float = 0.15  # spread of its per-scan micro-Doppler drone score
+
+
+class RfConfig(_Strict):
+    """Passive RF direction finders: hear control and video links, not silent drones."""
+
+    nodes: list[XY] = Field(default_factory=list)
+    range_m: float = 2000.0
+    bearing_sigma_deg: float = 3.0
+    detection_probability: float = 0.9
+    rate_hz: float = 1.0
+
+
+class RemoteIdConfig(_Strict):
+    """A receiver for direct Remote ID broadcasts (EU: ASD-STAN EN 4709-002, Wi-Fi/Bluetooth)."""
+
+    xy: XY = (0.0, 0.0)
+    range_m: float = 1000.0
+    gnss_sigma_m: XY = (3.0, 5.0)  # horizontal, vertical
+
+
+class GroundAcousticConfig(_Strict):
+    """Microphone grid for the picture; loudness scales its range per propulsion type."""
+
+    spacing_m: float = 300.0
+    range_m: float = 400.0  # small electric multirotor
+    combustion_factor: float = 2.0  # piston engines are heard much further
+    quiet_factor: float = 0.4  # low-noise props, gliding, or masked
+    bearing_sigma_deg: float = 2.0
+    detection_probability: float = 0.8
+
+
+class SensorNetConfig(_Strict):
+    """The ground sensors that, with the airborne node, build the recognised air picture."""
+
+    radar: RadarConfig | None = RadarConfig()
+    rf: RfConfig | None = None
+    remote_id: RemoteIdConfig | None = RemoteIdConfig()
+    acoustic: GroundAcousticConfig | None = None
+    whitelist: list[str] = Field(default_factory=list)  # Remote ID serials of our own drones
+    protected: dict[str, Site] = Field(default_factory=dict)  # what the picture defends
 
 
 class LinkLossEvent(_Strict):
@@ -259,6 +338,7 @@ class Scenario(_Strict):
     intruders: list[IntruderConfig] = Field(default_factory=list)
     birds: BirdConfig = BirdConfig()
     link_loss: list[LinkLossEvent] = Field(default_factory=list)
+    sensors: SensorNetConfig | None = None  # ground sensors for the recognised air picture
 
 
 class Config(_Strict):

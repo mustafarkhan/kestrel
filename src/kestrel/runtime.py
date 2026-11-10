@@ -22,7 +22,7 @@ from kestrel.config import Config, Scenario
 from kestrel.geofence import Geofence
 from kestrel.geometry import Vec
 from kestrel.interop.sapient import SapientExporter
-from kestrel.mission.executive import Context, Event, Executive, declared_drone
+from kestrel.mission.executive import CLASSIFY_STANDOFF_M, Context, Event, Executive, declared_drone
 from kestrel.mission.geometry import resolve_xy
 from kestrel.mission.llm import ChatBackend, MissionPlanner, PlanResult
 from kestrel.mission.parser import RuleParser, parse_emergency, parse_investigate
@@ -33,10 +33,15 @@ from kestrel.perception.camera import Camera, CameraPose
 from kestrel.perception.detector import Detection, SkyTargetDetector
 from kestrel.perception.render import SkyRenderer
 from kestrel.perception.tracker import MultiTargetTracker, TrackEstimate
+from kestrel.rap.loop import AirPicture
 from kestrel.safety.monitor import SafetyMonitor, SafetyRequest
 from kestrel.sim.birds import BirdState
 from kestrel.sim.world import SimWorld
 from kestrel.vehicle.sim_vehicle import SimVehicle
+
+# Picture traffic older than this is dropped (a long link loss); younger traffic is kept and the
+# separation filter widens its keep-out with the age.
+TRAFFIC_MAX_AGE_S = 5.0
 
 
 @dataclass
@@ -218,6 +223,7 @@ def run(
     avoidance: bool = True,
     sapient: SapientExporter | None = None,
     sapient_tasks: list[tuple[float, dict[str, object]]] | None = None,
+    air_picture: AirPicture | None = None,
 ) -> RunResult:
     """Fly one closed-loop mission.
 
@@ -225,6 +231,10 @@ def run(
     against: same mission and traffic, but no contact handling, no yielding and no
     separation filtering. The ratio of separation losses with and without avoidance is the
     risk ratio.
+
+    ``air_picture`` runs a ground fusion node alongside the flight: ground sensors and
+    Kestrel's own SAPIENT reports build one picture, and the picture's ``LOOK_AT`` tasks
+    reach Kestrel like any other command-node tasking (over the same link).
     """
     plan, report = plan_and_validate(command, cfg, scenario, backend)
     world = SimWorld(cfg, scenario)
@@ -253,6 +263,7 @@ def run(
     acoustic_fixes: list[AcousticFix] = []
     cmds = sorted(operator_commands or [])
     c2_tasks = sorted(sapient_tasks or [], key=lambda x: x[0])
+    traffic: list[TrackEstimate] = []  # the air picture's 3-D tracks, last received over the link
     rules = RuleParser(list(scenario.world.sites))
     first_cue_t: float | None = None
     first_confirm_t: float | None = None
@@ -354,20 +365,26 @@ def run(
             loc = parse_investigate(text, rules)
             if loc is not None:
                 executive.request_investigate(resolve_xy(loc, scenario.world), t, "operator")
+        if air_picture is not None:
+            c2_tasks += [(t, task) for task in air_picture.tick(t, birds)]
+            if link_ok:  # the picture's traffic reaches Kestrel over the same link
+                traffic = list(air_picture.traffic)
+            traffic = [tr for tr in traffic if t - tr.last_hit_t < TRAFFIC_MAX_AGE_S]
         while link_ok and c2_tasks and c2_tasks[0][0] <= t:
             _, msg = c2_tasks.pop(0)
-            look = sapient.look_at(msg) if sapient is not None else None
+            look = sapient.look_at_detail(msg) if sapient is not None else None
             if look is not None and sapient is not None:
-                task_id, xy = look
+                task_id, xy, z_known = look
                 ok = executive.mission is not None and not executive.aborted
                 sapient.task_ack(t, task_id, ok, "" if ok else "mission aborted")
                 if ok:
-                    executive.request_investigate(xy, t, "C2 tasking (SAPIENT)")
+                    standoff = CLASSIFY_STANDOFF_M if z_known else None
+                    executive.request_investigate(xy, t, "C2 tasking (SAPIENT)", standoff)
         monitor.check_vehicle(st, link_ok)
         if monitor.latched is not SafetyRequest.NONE:
             executive.abort(monitor.latched, ctx, monitor.reasons[-1])
         sp = executive.step(ctx)
-        dec = monitor.filter(st, sp, tracks + cues, executive.low_altitude_ok)
+        dec = monitor.filter(st, sp, tracks + cues + traffic, executive.low_altitude_ok)
         if dec.setpoint is not None:
             vehicle.set_setpoint(dec.setpoint)
         if sapient is not None:

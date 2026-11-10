@@ -55,7 +55,11 @@ flowchart LR
 | `perception/tracker.py` | multi-target tracking | bearing + log-range EKF, GNN association, M-of-N confirmation |
 | `perception/classify.py` | bird or drone | wing-beat flicker in the track's brightness, against sensor noise |
 | `perception/acoustic.py` | ground microphone network | bearings triangulated into horizontal fixes; altitude unknown, so a column |
-| `interop/sapient.py` | reports to other systems | SAPIENT ICD v7 registration, status, detection; UTM coordinates |
+| `interop/sapient.py` | reports to other systems | SAPIENT (BSI Flex 335 v2.0) registration, status, detection, task acknowledgement; UTM coordinates; checked against Dstl's schema |
+| `rap/sensors.py` | ground radar, RF, Remote ID, acoustic | each a SAPIENT node with its real counterpart's blind spots |
+| `rap/fusion.py` | the recognised air picture | association, Kalman fusion, duplicate merging, bounded class evidence, standard identities, choosing the next look |
+| `rap/loop.py` | the picture in a flight | ground sensors and Kestrel feed it; it tasks Kestrel with `LOOK_AT` |
+| `rap/score.py`, `rap/replay.py` | scoring; recorded traffic | GOSPA, duplicates, class and identity against truth; `kestrel fuse` on a SAPIENT log |
 | `sim/birds.py` | birds in the simulated sky | intermittent flapping and gliding, wandering paths |
 | `team.py` | several observers in one simulation | one fused tracker (triangulation), shared contacts, teammates as cooperative traffic |
 | `safety/monitor.py` | run-time assurance | every setpoint filtered; latched RTL/LAND |

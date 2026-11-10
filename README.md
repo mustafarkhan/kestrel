@@ -18,13 +18,21 @@ observers fuse their cameras into one track and get range by triangulation. A ja
 working on board for a bounded time and sends its reports when the link returns. A language model writes the plan;
 it never touches the controls. Every setpoint passes an independent safety monitor.
 
+Since v0.4 Kestrel also builds the **recognised air picture** it reports into: simulated radar, RF direction
+finders, a Remote ID receiver and an acoustic grid each report over SAPIENT to a fusion node that removes
+duplicates, tells drones from birds, identifies friend, neutral, suspect and unknown (never *hostile*: that is left
+to an operator), and tasks Kestrel to go and look where the ground sensors cannot decide
+([docs/air-picture.md](docs/air-picture.md)).
+
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
-🎬 **[Project video (6 min 20 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
+🎬 **[Project video (7 min 4 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
 rejected unsafe plan, a closed-loop flight with birds and acoustic cueing, bird-versus-drone on real rendered pixels,
 SAPIENT output, the same code flying ArduCopter SITL, the measured results against a no-avoidance baseline, then the
 sensor-node role: standing by over a harbour, investigating acoustic cues and a C2 tasking, working through a jammed
-link, two observers triangulating one drone, the measured sensor-node results and the parts cost.
+link, two observers triangulating one drone, the measured sensor-node results and the parts cost, then the air
+picture: five kinds of sensor fused into one picture that identifies friend from spoofer and tasks Kestrel, and
+its measured results.
 Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
 
 | | how | measured |
@@ -36,15 +44,17 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 | **Hear what the camera cannot see** | ground microphone grid, 2° bearings, triangulated fixes that point the camera and widen the keep-out | see the results matrix |
 | **Track** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.6 m median position error while shadowing at ~30 m |
 | **Keep clear** | give way to crossing traffic, standoff guidance, escape velocity; separation buffer from uncertainty, reachable set and stopping distance | risk ratio against no avoidance, below |
-| **Report and take tasking** | SAPIENT ICD v7 registration, status and detection reports, UTM coordinates; accepts and acknowledges `LOOK_AT` tasks ([interop.md](docs/interop.md)) | mandatory fields, coordinates and task round trip tested; no conformance run yet |
+| **Report and take tasking** | SAPIENT BSI Flex 335 v2.0 registration, status and detection reports, UTM coordinates; accepts and acknowledges `LOOK_AT` tasks ([interop.md](docs/interop.md)) | every message kind parsed against Dstl's published protobuf schema in CI; no run against a third-party fusion node yet |
+| **Build the air picture** | radar, RF, Remote ID and acoustic nodes over SAPIENT; association, Kalman fusion with each report's errors, duplicate merging, bounded class evidence ([air-picture.md](docs/air-picture.md)) | each sensor alone against all fused on the same 24 situations: see the air-picture table |
+| **Identify** | APP-6 identities: *friend* only for a whitelisted Remote ID serial corroborated by an independent sensor; a cloned serial is never a friend; *hostile* only by an operator | spoofed and cloned serials in the benchmark: see the air-picture table |
 | **Investigate reports** | stand by on station; go and look when a ground sensor, an operator or the C2 node reports something; confirm, classify, follow | report to track: see the sensor-node table |
 | **Work through jamming** | bounded on-board autonomy when the ground link is lost; reports held and sent with their original times | intruder held while jammed: see the sensor-node table |
 | **Fly as a team** | two observers, one fused tracker, shared contacts, each other as cooperative traffic | intruder position error with two observers against one: see the sensor-node table |
 | **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink) | full mission flown on **ArduCopter 4.6.3 SITL in CI** |
 
-> **Status (October 2026, v0.3).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
-> a real airframe**, has not been evaluated on real air-to-air footage, and nothing is flight-qualified. The camera,
-> bird and aircraft models are simplified. The known gaps are under [Limitations](#limitations), in
+> **Status (November 2026, v0.4).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
+> a real airframe**, has not been evaluated on real air-to-air footage or real sensor feeds, and nothing is
+> flight-qualified. The camera, bird, aircraft and ground-sensor models are simplified. The known gaps are under [Limitations](#limitations), in
 > [docs/safety.md](docs/safety.md) and, against published standards, in [docs/research.md](docs/research.md).
 > Kestrel is a sensor: it detects, tracks, keeps clear and reports. It has no intercept, engagement or targeting
 > function, and its reports describe airspace for its protection.
@@ -55,9 +65,10 @@ Simulation was the first gate. The next phase is deploying and testing Kestrel w
 defence-technology partners:
 
 - **Real sensor data.** The detector, tracker and bird/drone classifier evaluated on real air-to-air footage and
-  real acoustic cues, so the published numbers can be checked against the field.
-- **Multi-sensor network fusion.** Kestrel reporting alongside fixed sensors into one fusion node over SAPIENT,
-  and taking `LOOK_AT` tasks from it.
+  real acoustic cues, and the fusion node run on recorded multi-sensor SAPIENT traffic (`kestrel fuse`), so the
+  published numbers can be checked against the field.
+- **Multi-sensor network fusion with real sensors.** The fusion node is built and measured in simulation (v0.4);
+  the next step is Kestrel reporting alongside our partners' fixed sensors and taking `LOOK_AT` tasks from it.
 - **Field trials.** The sensor-node mission flown on a real airframe against a cooperating target drone.
 
 Results from that phase will be published here in the same way: measured, reproducible, with what did not work.
@@ -89,6 +100,17 @@ kestrel sim "take off to 25 m and stand by at the hangar for 4 minutes" --comman
 
 # operator emergencies are injected by time: abort at t = 60 s
 kestrel sim "survey the north field at 25 m" --command "60:abort"
+
+# the air picture: ground sensors and Kestrel fused into one picture that tasks Kestrel
+kestrel sim "take off to 25 m, stand by at the hangar for 4 minutes, then return home" \
+  --config configs/birds.yaml --scenario scenarios/airfield_picture.yaml --picture --sapient runs/sapient.jsonl
+
+# fuse any recorded SAPIENT log (JSON lines) into a picture, e.g. the one written above
+kestrel fuse runs/sapient.jsonl --out runs/rap.jsonl --whitelist KST-FRIEND-0001
+
+# the air-picture benchmarks: each sensor alone and all fused; then Kestrel listening, and tasked
+kestrel picture --runs 24 --seed0 7000
+kestrel picture --loop --runs 24 --seed0 8000
 ```
 
 With a local language model (optional; without one the rule parser handles constrained English):
@@ -174,6 +196,54 @@ Ground sensors are what make the node fast. With the camera alone, waiting on st
 Reproduce any row with the command in [docs/results/matrix.json](docs/results/matrix.json); per-run rows are in
 `docs/results/<set>/results.csv`. A test fails CI if these tables and the committed results disagree.
 
+### The air picture
+
+24 situations over a 1.6 km area around an airfield (seeds 7000-7023, never used while developing), 10 minutes
+each: six drones (three hostile: one with a radio link, one radio-silent with an engine, one radio-silent and quiet;
+two friendly with whitelisted Remote ID serials; one civil) and twelve birds, against a radar, four RF direction
+finders, a Remote ID receiver and an acoustic grid. In 10 of the 24 a seventh drone, a spoofer, broadcasts a
+friend's serial from a false position. The same situations are scored with each sensor alone and with all of them
+fused ([air-picture.md](docs/air-picture.md)).
+
+| sensors | hostile drone-time covered | drone-time shown as UAV | bird-time shown as UAV | friend-time shown as friend | hostile shown as friend / phantom friend (total) | duplicate track ratio | track ids per drone | GOSPA |
+|---|---|---|---|---|---|---|---|---|
+| radar alone | 78% | 72% | 0% | 0% | 0 s / 0 s | 0.000 | 1.38 | 31.8 m |
+| RF direction finders alone | 34% | 100% | 0% | 0% | 0 s / 0 s | 0.000 | 1.43 | 66.7 m |
+| acoustic grid alone | 62% | 100% | 0% | 0% | 0 s / 0 s | 0.000 | 1.71 | 57.0 m |
+| Remote ID alone | 0% | 100% | 0% | 0% | 0 s / 10 s | 0.000 | 1.01 | 59.3 m |
+| all fused, no whitelist | 78% | 96% | 2% | 0% | 0 s / 0 s | 0.001 | 1.50 | 32.5 m |
+| all fused | 78% | 96% | 2% | 82% | 2 s / 16 s | 0.001 | 1.50 | 32.5 m |
+
+Fusion is about knowing what a track is, more than about seeing more. The radar finds as many hostile drones as
+everything together (78% of the hostile drone-time), but on its own it calls only 72% of drone-time *UAV* and
+leaves the rest unknown, because a micro-Doppler score is a weak opinion. Fused, 96% of drone-time is shown as *UAV*
+and 2% of bird-time as *UAV*; the RF, acoustic and Remote ID nodes hear only drones, so they settle the class
+wherever they reach. The fourth of hostile drone-time no sensor covers is low, radio-silent and quiet drones
+beyond the radar's clutter horizon: fusion cannot report what no sensor saw, which is where an airborne node is
+sent. Friendly drones are shown as *friend* 82% of the time (never without an independent sensor in the right
+place). Remote ID alone shows a spoofer's broadcast as a friend where no friend is (10 s); fused, the clone rule
+keeps every copy of a cloned serial from being a friend, and the 16 s of phantom friend left come from two spoofer
+runs in which the false position lay within 50 m of the real friend, inside the radar's gate. The 2 s of a hostile
+shown as friend are close crossings, where the friendly track passed within 2 m of a hostile and the scoring
+matched the hostile to it.
+
+Then Kestrel flies with the picture: standing by at the hangar for 4 minutes while a radio-silent, quiet drone
+the radar sees but cannot classify comes in, alongside a friendly drone and the birds (seeds 8000-8023). Either
+the picture only listens to Kestrel's reports, or it tasks Kestrel to go and look.
+
+| with Kestrel | hostile drones classified as UAV | first track to UAV (median / p90) | drone-time shown as UAV | drone-time shown as bird | looks flown per mission | missions completed | runs inside 12 m | closest approach |
+|---|---|---|---|---|---|---|---|---|
+| picture without tasking | 20/24 | 7 s / 80 s | 83% | 0% | 0.0 | 24/24 | 0/24 | 44.6 m |
+| picture tasks Kestrel | 23/24 | 16 s / 46 s | 92% | 0% | 7.2 | 24/24 | 0/24 | 12.4 m |
+
+Tasking classified the hostile drone in 23 of 24 encounters against 20, and cut the 90th percentile from first
+track to *UAV* from 80 s to 46 s. The median rose from 7 to 16 s only because tasking adds the hard cases: on the
+19 encounters classified both ways, tasking was faster in 7 and never slower. Untasked, Kestrel classified one
+encounter (236 s after the first track) that tasked it did not. The cost is proximity: sent to look, Kestrel came
+to 12.4 m of a drone at closest, against 44.6 m standing by, and no run went inside 12 m. That only holds since the
+picture's 3-D tracks reach Kestrel's separation filter: before, one tasked look flew under the hostile drone, held
+by the radar 10 m above Kestrel and out of its camera's view ([0015](docs/decisions/0015-air-picture.md)).
+
 ![Mission overview](docs/figures/overview.png)
 
 ![Separation, tracking error and altitude over the demo flight](docs/figures/timeline.png)
@@ -190,6 +260,9 @@ flowchart LR
     Q --> S
     K --> SAP[SAPIENT reports]
     Q --> SAP
+    GS[ground radar, RF,<br/>Remote ID, acoustic] --> SAP
+    SAP --> FN[fusion node<br/>air picture] -->|LOOK_AT task| EX
+    FN -->|3-D traffic| S
 ```
 
 Three independent barriers stand between language and motors: the **schema** (the model can only express known
@@ -222,6 +295,7 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | [0011](docs/decisions/0011-cues-identity-and-the-way-home.md) | giving way to cued aircraft already tracked; one drone followed three times; stuck on the way home | cues explained by a track dropped; aircraft identity across tracks; homeward yield cap |
 | [0012](docs/decisions/0012-contact-watch-memory.md) | camera kept staring at where an intruder had been a minute earlier while traffic came head-on | watch a stale contact for 15 s, then look where you are going: 3/24 → 1/24 runs inside 12 m |
 | [0013](docs/decisions/0013-two-intruders.md) | two intruders: one camera loses well clear in 15/24 runs, mostly to the aircraft it is not looking at | measured, explained; acoustic cueing cuts it to 4/24 at the cost of early returns |
+| [0015](docs/decisions/0015-air-picture.md) | class evidence summed over every report made birds certain; a spoofer inherited a friend's corroboration; tasked looks queued stale positions and left too early; a tasked look flew under a drone only the radar held | bounded per-sensor evidence; corroboration by an independent sensor and the clone rule; a look follows the track until it is resolved; the picture's 3-D tracks go to the separation filter |
 | [0014](docs/decisions/0014-sensor-node.md) | investigating from a climbing altitude put targets below the horizon; standby never ended under repeated cues; teammates tracked as intruders; two observers following one drone | hold mission altitude; standby time includes excursions; friendly by bearing, safety on all tracks; contacts claimed within the tick |
 
 ## Testing
@@ -229,7 +303,7 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | job | what | runs |
 |---|---|---|
 | `lint` | ruff, ruff format, mypy `--strict` | every push |
-| `unit` | 90 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, SAPIENT message fields and UTM against PROJ, LLM planner against a local HTTP server | Python 3.11, 3.12, 3.13 |
+| `unit` | 127 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, SAPIENT messages parsed against the published v2.0 schema, UTM against PROJ, sensor blind spots, fusion consistency, friend/spoof/clone identification, LLM planner against a local HTTP server, README tables against the committed results | Python 3.11, 3.12, 3.13 |
 | `closed-loop` | full-stack simulations: detect, track and keep separation; operator abort; link-loss failsafe; rejected plans never fly | every push |
 | `sitl` | builds ArduCopter 4.6.3 SITL (cached) and flies a mission through GUIDED mode | every push |
 
@@ -257,8 +331,15 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 - **Acoustic model** has bearing noise, range and latency, but no wind, terrain or urban noise.
 - **Monocular range** rests on an assumed target size (0.35 m). The safety monitor's 15% range-uncertainty floor
   covers modest errors, not a wrong aircraft class.
-- **SAPIENT** output follows the published ICD's field names and units but is written as JSON; the protobuf encoding
-  and a conformance test against a fusion node are not done ([interop.md](docs/interop.md)).
+- **SAPIENT** messages are written as JSON that parses against Dstl's published BSI Flex 335 v2.0 protobuf schema;
+  the TCP framing and a run against a third-party fusion node or the SAPIENT test harness are not done
+  ([interop.md](docs/interop.md)).
+- **Ground sensors** in the air picture are simple models with typical published parameters, not particular
+  products: radar is the radar equation with clutter masking by a range-and-height rule, micro-Doppler is a noisy
+  score, not a spectrum ([air-picture.md](docs/air-picture.md#limits)).
+- **Remote ID is not authenticated.** A hostile broadcasting one of our serials from its own true position while our
+  drone with that serial is on the ground would be corroborated and shown as friend. A fielded system needs
+  authenticated friendly-force tracking.
 - **ArduPilot only.** PX4 OFFBOARD is detected and refused rather than half-supported.
 
 ## Repository layout
@@ -273,14 +354,16 @@ src/kestrel/
   sim/          rigid-body quadrotor, wind, intruders, birds, world
   vehicle/      Vehicle protocol, simulated vehicle, ArduPilot over MAVLink
   interop/      SAPIENT messages and tasking, UTM conversion
+  rap/          the air picture: ground sensor models, fusion node, scoring, tasking loop, replay of SAPIENT logs
   runtime.py    closed-loop simulation      team.py   several observers, one fused picture
   live.py       real-time loop for MAVLink
-  bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | fly
+  bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | picture | fuse | fly
 docs/           concept of operations, architecture, safety case, research and standards map, SAPIENT
                 mapping, decision records, published results, video and its renderer
 scripts/        SITL flight recording; benchmark result collection
 configs/        default, acoustic, acoustic with the jam-resilient link policy, camera ring, birds, everything on
-scenarios/      airfield, airfield with birds, harbour (sea surface)
+scenarios/      airfield, airfield with birds, harbour (sea surface), airfield with ground sensors (air picture)
+third_party/    Dstl's SAPIENT protobuf schema (Apache-2.0), for the conformance test
 tests/          unit, property, closed-loop and SITL tests
 ```
 

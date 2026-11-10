@@ -13,13 +13,17 @@ Two groups, each on encounters never used while developing:
 * the **encounter matrix** (seeds 4000-4023): the survey mission against one or two
   intruders, birds, and sensor layouts, with and without avoidance;
 * the **sensor-node matrix** (seeds 6000-6023): the standby-and-investigate mission,
-  measuring time from a report to a track, two observers, and a jammed link.
+  measuring time from a report to a track, two observers, and a jammed link;
+* the **air picture** (``--picture``): ground sensors alone and fused over a 1.6 km area
+  (seeds 7000-7023, ``kestrel picture``), and the picture tasking Kestrel against a
+  radio-silent drone (seeds 8000-8023), copied from ``runs/picture`` and ``runs/loop``.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -197,6 +201,97 @@ def node_row(label: str, s: dict[str, Any]) -> str:
     )
 
 
+# --------------------------------------------------------------------------- air picture
+
+PICTURE_SEED0 = 7000
+LOOP_SEED0 = 8000
+PICTURE_ROWS = [
+    ("radar", "radar alone"),
+    ("rf", "RF direction finders alone"),
+    ("acoustic", "acoustic grid alone"),
+    ("remote_id", "Remote ID alone"),
+    ("fused_no_whitelist", "all fused, no whitelist"),
+    ("fused", "all fused"),
+]
+LOOP_ROWS = [("untasked", "picture without tasking"), ("tasked", "picture tasks Kestrel")]
+
+
+def collect_picture(src: Path = ROOT / "runs") -> None:
+    """Copy the picture benchmark (``runs/picture``) and the loop benchmark (``runs/loop``)."""
+    for name in ("picture", "loop"):
+        dst = ROOT / "docs" / "results" / name
+        dst.mkdir(parents=True, exist_ok=True)
+        for f in sorted((src / name).glob("*.json")):
+            if re.search(r"-\d{3}\.json$", f.name):
+                continue  # a part of a benchmark run in parts; the merged file is copied
+            shutil.copy(f, dst / f.name)
+    print("copied picture and loop results")
+
+
+def _pct(v: float | None) -> str:
+    return "n/a" if v is None else f"{100 * v:.0f}%"
+
+
+def picture_row(label: str, s: dict[str, Any]) -> str:
+    """One README air-picture row; tests/test_published_results.py builds the same string."""
+    return (
+        f"| {label} | {_pct(s['hostile_coverage'])} | {_pct(s['drone_as_uav'])} "
+        f"| {_pct(s['bird_time_as_uav'])} | {_pct(s['friend_identified'])} "
+        f"| {s['hostile_as_friend_s']:.0f} s / {s['phantom_friend_s']:.0f} s "
+        f"| {s['duplicate_ratio']:.3f} | {s['ids_per_drone']:.2f} | {s['gospa_m']:.1f} m |"
+    )
+
+
+def loop_row(label: str, s: dict[str, Any]) -> str:
+    """One README row for Kestrel flying with the picture; tests/test_published_results.py checks it."""
+    med, p90 = s.get("track_to_uav_median_s"), s.get("track_to_uav_p90_s")
+    timing = "n/a" if med is None else f"{med:.0f} s / {p90:.0f} s"
+    return (
+        f"| {label} | {s['hostiles_classified']:.0f}/{s['runs']} | {timing} | {_pct(s['drone_as_uav'])} "
+        f"| {_pct(s['drone_as_bird'])} | {s['looks']:.1f} | {s['completed_runs']}/{s['runs']} "
+        f"| {s['runs_with_lowc']}/{s['runs']} | {s['closest_approach_m']:.1f} m |"
+    )
+
+
+def print_picture_tables() -> None:
+    res = ROOT / "docs" / "results"
+    pic = json.loads((res / "picture" / "summary.json").read_text(encoding="utf-8"))
+    head = [
+        "sensors",
+        "hostile drone-time covered",
+        "drone-time shown as UAV",
+        "bird-time shown as UAV",
+        "friend-time shown as friend",
+        "hostile shown as friend / phantom friend (total)",
+        "duplicate track ratio",
+        "track ids per drone",
+        "GOSPA",
+    ]
+    print("| " + " | ".join(head) + " |")
+    print("|" + "---|" * len(head))
+    for key, label in PICTURE_ROWS:
+        if key in pic:
+            print(picture_row(label, pic[key]))
+    print()
+    head = [
+        "with Kestrel",
+        "hostile drones classified as UAV",
+        "first track to UAV (median / p90)",
+        "drone-time shown as UAV",
+        "drone-time shown as bird",
+        "looks flown per mission",
+        "missions completed",
+        "runs inside 12 m",
+        "closest approach",
+    ]
+    print("| " + " | ".join(head) + " |")
+    print("|" + "---|" * len(head))
+    for key, label in LOOP_ROWS:
+        f = res / "loop" / f"summary_{key}.json"
+        if f.exists():
+            print(loop_row(label, json.loads(f.read_text(encoding="utf-8"))))
+
+
 def print_tables() -> None:
     m = json.loads((ROOT / "docs" / "results" / "matrix.json").read_text(encoding="utf-8"))
     print(
@@ -240,5 +335,9 @@ def print_tables() -> None:
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--table":
         print_tables()
+        print()
+        print_picture_tables()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--picture":
+        collect_picture()
     else:
         main(sys.argv[1] if len(sys.argv) > 1 else "runs/m")

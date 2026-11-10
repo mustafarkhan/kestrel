@@ -61,6 +61,8 @@ YIELD_MARGIN_M = 6.0  # yield if the predicted closest approach is under min sep
 YIELD_CLEAR_S = 2.0  # conflict must stay clear this long before the path resumes
 YIELD_MAX_S = 60.0  # give up on the task (skip it) if it stays blocked this long
 CUE_AGE_S = 3.0  # external cues arrive late (acoustic: ~1 s) so they are trusted for longer
+REFRESH_RADIUS_M = 120.0  # a re-sent tasking this close to the current look updates it
+CLASSIFY_STANDOFF_M = 30.0  # a 3-D track can be approached to the follow distance, to classify it
 INVESTIGATE_STANDOFF_M = 45.0  # outside the keep-out the safety monitor holds around a cue
 INVESTIGATE_TILT_DEG = 12.0  # look up the reported column: targets above are seen against sky
 INVESTIGATE_RADIUS_M = 35.0  # a drone track this close (horizontally) to the report confirms it
@@ -520,7 +522,8 @@ class Executive:
         self.yield_last_t = 0.0
         self.yield_total_s = 0.0
         self.return_yield_s = 0.0
-        self.requests: list[tuple[float, Vec, str]] = []  # investigation requests from outside
+        # investigation requests from outside: (time, position, source, standoff or None)
+        self.requests: list[tuple[float, Vec, str, float | None]] = []
         self.investigated: list[tuple[float, Vec]] = []  # (time, position) of investigations
         self.handled_aircraft: dict[int, tuple[float, Vec]] = {}  # track id -> (last seen, position)
         self.watch_radius_m = 70.0
@@ -632,9 +635,28 @@ class Executive:
             self._activate(HoldB(1e9, name="hold (operator stop)"), ctx)
 
     # ------------------------------------------------------------------ investigations
-    def request_investigate(self, xy: Vec, t: float, source: str) -> None:
-        """A tasking from outside (operator, or a command node over SAPIENT): go and look here."""
-        self.requests.append((t, np.asarray(xy, dtype=float)[0:2].copy(), source))
+    def request_investigate(self, xy: Vec, t: float, source: str, standoff_m: float | None = None) -> None:
+        """A tasking from outside (operator, or a command node over SAPIENT): go and look here.
+
+        A new position from the same source while that look is still under way, and close
+        to it, is the command node following a moving aircraft: it updates the look rather
+        than queueing another. ``standoff_m`` overrides the default standoff when the
+        report places the aircraft in three dimensions (a radar or fused track), so the
+        observer can come close enough to classify it rather than stay outside a column.
+        """
+        xy = np.asarray(xy, dtype=float)[0:2].copy()
+        cur = self.current
+        if (
+            isinstance(cur, InvestigateB)
+            and cur.result is None
+            and cur.source == source
+            and float(np.linalg.norm(xy - cur.xy)) < REFRESH_RADIUS_M
+        ):
+            cur.xy = xy
+            return
+        # the latest tasking from a source supersedes any of its requests still waiting
+        self.requests = [r for r in self.requests if r[2] != source]
+        self.requests.append((t, xy, source, standoff_m))
         self._log(t, "tasking", f"{source}: investigate ({xy[0]:.0f}, {xy[1]:.0f})")
 
     def _recently_investigated(self, xy: Vec, t: float) -> bool:
@@ -698,7 +720,7 @@ class Executive:
             or cur.done(ctx)  # the task's time is up: move on rather than start another look
         ):
             return
-        cand: tuple[float, Vec, str] | None = None
+        cand: tuple[float, Vec, str, float | None] | None = None
         if self.requests:
             cand = self.requests.pop(0)
         elif self.mission.on_cue == "investigate":
@@ -711,13 +733,13 @@ class Executive:
             ]
             if fresh:
                 c = min(fresh, key=lambda c: float(np.linalg.norm(c.pos[0:2] - ctx.state.pos[0:2])))
-                cand = (c.last_hit_t, c.pos[0:2].copy(), "acoustic cue")
+                cand = (c.last_hit_t, c.pos[0:2].copy(), "acoustic cue", None)
         if cand is None:
             return
-        t_report, xy, source = cand
+        t_report, xy, source, standoff = cand
         lim = self.cfg.safety
         b = InvestigateB(
-            xy, source, INVESTIGATE_STANDOFF_M, self.mission.investigate_timeout_s,
+            xy, source, standoff or INVESTIGATE_STANDOFF_M, self.mission.investigate_timeout_s,
             lim.max_horizontal_speed * 0.85, lim.max_acceleration * 0.7,
         )  # fmt: skip
         b.report_t = t_report

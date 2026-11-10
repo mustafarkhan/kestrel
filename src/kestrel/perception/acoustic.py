@@ -74,17 +74,21 @@ class AcousticNetwork:
         return fixes
 
     def _triangulate(self, nodes: Vec, bearings: Vec, ranges: Vec) -> tuple[Vec, Vec] | None:
-        """Weighted least-squares intersection of bearing lines.
+        return triangulate(nodes, bearings, ranges, self.sigma)
 
-        Each bearing defines a line through its node; the residual is the perpendicular
-        distance, with standard deviation ``range * sigma``. Ranges come from truth only to
-        weight the lines, which a real network approximates from the first-pass fix.
-        """
-        normals = np.stack([-np.sin(bearings), np.cos(bearings)], axis=1)
-        w = 1.0 / np.maximum(ranges * self.sigma, 1.0) ** 2
-        a = (normals * w[:, None]).T @ normals
-        b = (normals * w[:, None]).T @ np.sum(normals * nodes, axis=1)
-        if np.linalg.cond(a) > 1e6:  # bearing lines nearly parallel: no usable fix
-            return None
-        xy = np.linalg.solve(a, b)
-        return xy, np.linalg.inv(a)
+
+def triangulate(nodes: Vec, bearings: Vec, ranges: Vec, sigma: float) -> tuple[Vec, Vec] | None:
+    """Weighted least-squares intersection of bearing lines (acoustic or RF direction finders).
+
+    Each bearing defines a line through its node; the residual is the perpendicular
+    distance, with standard deviation ``range * sigma``. Ranges come from truth only to
+    weight the lines, which a real network approximates from the first-pass fix.
+    """
+    normals = np.stack([-np.sin(bearings), np.cos(bearings)], axis=1)
+    w = 1.0 / np.maximum(ranges * sigma, 1.0) ** 2
+    a = (normals * w[:, None]).T @ normals
+    b = (normals * w[:, None]).T @ np.sum(normals * nodes, axis=1)
+    if np.linalg.cond(a) > 1e6:  # bearing lines nearly parallel: no usable fix
+        return None
+    xy = np.linalg.solve(a, b)
+    return xy, np.linalg.inv(a)

@@ -868,6 +868,203 @@ def slide_cost() -> list[Image.Image]:
     return list(faded(hold(r, 11.0)))
 
 
+# --------------------------------------------------------------------------- air picture
+
+IDENTITY_COLOUR = {
+    "FRIEND": BLUE,
+    "ASSUMED_FRIEND": (120, 170, 235),
+    "NEUTRAL": GREEN,
+    "SUSPECT": ORANGE,
+    "UNKNOWN": (225, 200, 70),
+    "HOSTILE": RED,
+    "PENDING": GREY,
+}
+SENSOR_LETTER = {
+    "NODE_TYPE_RADAR": "R",
+    "NODE_TYPE_PASSIVE_RF": "F",
+    "NODE_TYPE_ACOUSTIC": "A",
+    "NODE_TYPE_CAMERA": "K",
+}
+
+
+def _picture_caption(t: float, picture: list[Any]) -> str:
+    if any(tr.identity == "SUSPECT" and tr.remote_id is not None for tr in picture):
+        return "One of our serials broadcast from two places: neither is shown as friend, the copy is suspect"
+    if any(tr.identity == "SUSPECT" for tr in picture):
+        return "An unidentified drone heading for a protected site is suspect. Hostile is an operator's call"
+    if t < 60:
+        return "Radar sees drones and birds alike; RF hears radio links; Remote ID hears what drones say"
+    return "One track per aircraft: duplicates merged, class fused, friend only with a second sensor's word"
+
+
+def picture_frames(run: Any, number: str = "14") -> Iterator[Image.Image]:
+    """The fused picture over the flank area: truth faint, picture tracks by standard identity."""
+    from kestrel.rap.fusion import site_disc
+
+    sc = run.scenario
+    frames = run.frames
+    half = 900.0
+    mx, my, size = 40, 70, 610
+
+    def to_px(x: float, y: float) -> tuple[float, float]:
+        return mx + (x + half) / (2 * half) * size, my + (half - y) / (2 * half) * size
+
+    speed = 20.0
+    t_end = frames[-1][0]
+    times = list(np.arange(0.0, t_end, speed / FPS))
+    trails: dict[int, list[tuple[float, float]]] = {}
+    sensors = sc.sensors
+    for n, tq in enumerate(times):
+        k = min(int(tq), len(frames) - 1)
+        t, objects, picture = frames[k]
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((40, 22), f"{number}  The recognised air picture: five kinds of sensor, one picture", fill=BLUE,
+               font=sans(24, "SemiBold"))  # fmt: skip
+        d.rectangle([mx, my, mx + size, my + size], fill=PANEL)
+        f = np.asarray(sc.world.fence, dtype=float)
+        d.polygon([to_px(x, y) for x, y in f], outline=LINE, width=2)
+        for name, site in (sensors.protected if sensors else {}).items():
+            c, r = site_disc(site)
+            x0, y0 = to_px(c[0] - r, c[1] + r)
+            x1, y1 = to_px(c[0] + r, c[1] - r)
+            d.ellipse([x0, y0, x1, y1], outline=(150, 80, 40), width=2)
+            d.text((x1 + 4, y0), name, fill=(190, 110, 70), font=sans(14))
+        if sensors is not None:
+            rx, ry = to_px(0.0, 0.0)
+            d.polygon([(rx, ry - 9), (rx - 8, ry + 6), (rx + 8, ry + 6)], outline=INK, width=2)
+            if sensors.radar is not None:
+                rr = sensors.radar.masked_beyond_m / (2 * half) * size
+                d.ellipse([rx - rr, ry - rr, rx + rr, ry + rr], outline=(70, 70, 66), width=1)
+                d.text((rx - 70, ry + rr + 4), "radar sees low targets inside", fill=MUTED, font=sans(13))
+            for nx, ny in sensors.rf.nodes if sensors.rf else []:
+                px, py = to_px(nx, ny)
+                d.polygon([(px, py - 7), (px + 7, py), (px, py + 7), (px - 7, py)], outline=PURPLE, width=2)
+        for o in objects:
+            px, py = to_px(float(o.pos[0]), float(o.pos[1]))
+            if not (mx <= px <= mx + size and my <= py <= my + size):
+                continue
+            if o.kind == "bird":
+                d.line([(px - 3, py - 3), (px + 3, py + 3)], fill=(90, 90, 85), width=1)
+                d.line([(px - 3, py + 3), (px + 3, py - 3)], fill=(90, 90, 85), width=1)
+            else:
+                d.ellipse([px - 6, py - 6, px + 6, py + 6], outline=(110, 110, 104), width=1)
+        live = set()
+        for tr in picture:
+            px, py = to_px(float(tr.pos[0]), float(tr.pos[1]))
+            if not (mx <= px <= mx + size and my <= py <= my + size):
+                continue
+            live.add(tr.ident)
+            trails.setdefault(tr.ident, []).append((px, py))
+            trail = trails[tr.ident][-25:]
+            col = IDENTITY_COLOUR.get(tr.identity, GREY)
+            if len(trail) > 1:
+                d.line(trail, fill=tuple(int(0.55 * c) for c in col), width=2)
+            r = 5 if tr.p_uav < 0.5 else 6
+            d.ellipse([px - r, py - r, px + r, py + r], fill=col)
+        # right panel: the picture as an operator reads it
+        x0 = 690
+        d.text((x0, 72), f"t = {t:5.0f} s", fill=MUTED, font=mono(18))
+        for i, line in enumerate(wrap(d, _picture_caption(t, picture), sans(21, "Medium"), W - x0 - 40)):
+            d.text((x0, 104 + 28 * i), line, fill=INK, font=sans(21, "Medium"))
+        y = 196
+        d.text((x0, y), "track   identity         class      sensors", fill=MUTED, font=mono(16))
+        y += 26
+        drones = sorted(
+            [
+                tr
+                for tr in picture
+                if tr.p_uav >= 0.5 or tr.identity in ("FRIEND", "ASSUMED_FRIEND", "SUSPECT")
+            ],
+            key=lambda tr: (tr.identity not in ("SUSPECT", "UNKNOWN"), tr.ident),
+        )
+        birds = sum(1 for tr in picture if tr.p_uav < 0.5 and tr not in drones)
+        for tr in drones[:11]:
+            col = IDENTITY_COLOUR.get(tr.identity, GREY)
+            cls = "UAV" if tr.p_uav >= 0.8 else ("bird" if tr.p_uav <= 0.2 else "unknown")
+            sens = "".join(sorted(SENSOR_LETTER.get(n, "?") for n in tr.node_types))
+            if tr.remote_id is not None:
+                sens += "+ID"
+            d.text(
+                (x0, y),
+                f"#{tr.ident:<5d} {tr.identity.lower():16s} {cls:10s} {sens}",
+                fill=col,
+                font=mono(16),
+            )
+            y += 24
+        d.text((x0, y + 8), f"+ {birds} other tracks, mostly birds", fill=MUTED, font=sans(16))
+        legend = [("friend", BLUE), ("assumed friend", IDENTITY_COLOUR["ASSUMED_FRIEND"]), ("suspect", ORANGE),
+                  ("unknown", IDENTITY_COLOUR["UNKNOWN"]), ("neutral", GREEN)]  # fmt: skip
+        ly = 612
+        lx = x0
+        for name, col in legend:
+            d.ellipse([lx, ly + 4, lx + 10, ly + 14], fill=col)
+            d.text((lx + 16, ly), name, fill=INK2, font=sans(15))
+            lx += int(d.textlength(name, font=sans(15))) + 40
+        d.text((x0, ly + 26), "R radar · F RF / Remote ID · A acoustic · K Kestrel · faint: ground truth",
+               fill=MUTED, font=sans(15))  # fmt: skip
+        footer(d, f"closed-loop simulation · 1.6 km area · time ×{speed:.0f} · seed {sc.seed}")
+        yield fade(im, min(1.0, (n + 1) / 9, (len(times) - n) / 9))
+
+
+def slide_picture_results(picture: dict[str, Any], loop: dict[str, Any]) -> list[Image.Image]:
+    rows = [("radar", "radar alone"), ("rf", "RF alone"), ("acoustic", "acoustic alone"),
+            ("remote_id", "Remote ID alone"), ("fused", "all fused")]  # fmt: skip
+
+    def pct(v: float | None) -> str:
+        return "n/a" if v is None else f"{100 * v:.0f}%"
+
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((70, 44), "15  The picture, measured", fill=BLUE, font=sans(26, "SemiBold"))
+        meta = picture.get("_meta", {})
+        d.text((70, 82), f"24 situations over a 1.6 km area (fresh seeds {meta.get('seeds', ['?'])[0]}+): each sensor "
+               "alone against all of them fused", fill=MUTED, font=sans(19))  # fmt: skip
+        cols = [("", 70), ("hostile drones covered", 330), ("drones shown as UAV", 580), ("friends identified", 810),
+                ("hostile shown as friend", 1010)]  # fmt: skip
+        y = 128
+        for name, x in cols:
+            d.text((x, y), name, fill=MUTED, font=sans(16))
+        y += 30
+        for i, (key, label) in enumerate(rows):
+            if t < 0.3 * i or key not in picture:
+                continue
+            sm = picture[key]
+            vals = [pct(sm.get("hostile_coverage")), pct(sm.get("drone_as_uav")),
+                    pct(sm.get("friend_identified")), f"{sm.get('hostile_as_friend_s', 0):.0f} s"]  # fmt: skip
+            d.line([(70, y - 5), (W - 60, y - 5)], fill=LINE, width=1)
+            d.text((70, y), label, fill=INK if key != "fused" else AQUA, font=sans(19, "Medium"))
+            for (_, x), v in zip(cols[1:], vals, strict=True):
+                d.text((x, y), v, fill=INK, font=mono(19))
+            y += 36
+        if t > 2.0 and loop:
+            y += 20
+            d.text((70, y), "With Kestrel, a radio-silent drone the radar cannot classify (24 encounters each):",
+                   fill=MUTED, font=sans(19))  # fmt: skip
+            y += 36
+            for key, label in (("untasked", "picture without tasking"), ("tasked", "picture tasks Kestrel")):
+                sm = loop.get(key)
+                if sm is None:
+                    continue
+                n = sm.get("runs", 24)
+                cl = sm.get("hostiles_classified", 0)
+                med, p90 = sm.get("track_to_uav_median_s"), sm.get("track_to_uav_p90_s")
+                txt = f"{int(cl)}/{n} classified as drones" + (
+                    "" if med is None else f", median {med:.0f} s (p90 {p90:.0f} s) after first track"
+                )
+                txt += f"; {sm.get('runs_with_lowc', 0)}/{n} runs inside 12 m"
+                d.text((70, y), label, fill=INK if key == "untasked" else AQUA, font=sans(20, "Medium"))
+                d.text((420, y), txt, fill=INK, font=sans(20))
+                y += 34
+        footer(
+            d, "every number in docs/results/picture and docs/results/loop, reproducible with kestrel picture"
+        )
+        return im
+
+    return list(faded(hold(r, 13.0)))
+
+
 # --------------------------------------------------------------------------- birds
 
 
@@ -1185,7 +1382,16 @@ STANDARDS = [
         "2° bearings, cueing layer, altitude unknown",
         "implemented",
     ),
-    ("SAPIENT ICD v7 (NATO C-UAS)", "registration, status and detection reports", "implemented"),
+    (
+        "SAPIENT, BSI Flex 335 v2.0 (NATO C-UAS)",
+        "every message parsed against Dstl's published schema; LOOK_AT tasking",
+        "implemented",
+    ),
+    (
+        "NATO C-UAS data challenge 2026: one picture",
+        "duplicates removed, class fused, friend / unknown identified; scored in simulation",
+        "measured",
+    ),
     ("ECFR and allied studies: birds", "bird false alarms counted, flicker classifier", "implemented"),
     ("ArduPilot", "same autonomy code flies ArduCopter SITL in CI", "implemented"),
     ("Real flight, real footage, certification", "not done; the next step", "not claimed"),
@@ -1198,14 +1404,14 @@ def slide_standards() -> list[Image.Image]:
         d = ImageDraw.Draw(im)
         d.text(
             (96, 60),
-            "14  Held against published standards and field reports",
+            "16  Held against published standards and field reports",
             fill=BLUE,
             font=sans(26, "SemiBold"),
         )
         for i, (src, what, status) in enumerate(STANDARDS):
             if t < 0.4 * i:
                 continue
-            y = 130 + 72 * i
+            y = 120 + 66 * i
             col = {"measured": BLUE, "implemented": AQUA, "not claimed": ORANGE}[status]
             d.rounded_rectangle([96, y, 260, y + 40], radius=8, outline=col, width=2)
             d.text((110, y + 8), status, fill=col, font=sans(18, "SemiBold"))
@@ -1250,7 +1456,7 @@ def slide_notes() -> list[Image.Image]:
         im = blank()
         d = ImageDraw.Draw(im)
         d.text(
-            (96, 70), "15  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
+            (96, 70), "17  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
         )
         for i, (prob, fix) in enumerate(NOTES):
             if t < 0.5 * i:
@@ -1273,14 +1479,15 @@ def slide_next() -> list[Image.Image]:
         ),
         (
             "With",
-            "real sensor data, multi-sensor network fusion over SAPIENT, field trials against a target drone",
+            "real sensor data in the picture (kestrel fuse reads recorded SAPIENT), night and thermal, "
+            "field trials against a target drone",
         ),
     ]
 
     def r(t: float) -> Image.Image:
         im = blank()
         d = ImageDraw.Draw(im)
-        d.text((96, 120), "16  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
+        d.text((96, 120), "18  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
         for i, (k, v) in enumerate(rows):
             if t < 0.6 * i:
                 continue
@@ -1333,6 +1540,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=str(ROOT / "docs" / "video" / "kestrel_demo.mp4"))
     args = ap.parse_args()
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     cfg_path = ROOT / "configs" / "default.yaml"
     scen_path = ROOT / "scenarios" / "airfield.yaml"
     demo_cfg = load_config(ROOT / "configs" / "full.yaml")
@@ -1357,7 +1565,7 @@ def main() -> None:
     ]
     task = {
         "node_id": "c2-node",
-        "task": {"task_id": "C2-0001", "command": {"look_at": {"locations": corners}}},
+        "task": {"task_id": "C2-0001", "command": {"look_at": {"location_list": {"locations": corners}}}},
     }
     node_res = run(
         NODE_INSTRUCTION, node_cfg, port, record_every=1, record_downsample=1, sapient=node_sapient,
@@ -1370,7 +1578,18 @@ def main() -> None:
         load_scenario(ROOT / "scenarios" / "airfield.yaml"),
         2,
     )
+    print("building the air picture ...", flush=True)
+    from kestrel.rap.picture import flank_scenario, run_picture
+
+    picture_run = run_picture(flank_scenario(5, spoofer=True), record_every_s=1.0)
     matrix = json.loads((ROOT / "docs" / "results" / "matrix.json").read_text(encoding="utf-8"))
+    res_dir = ROOT / "docs" / "results"
+    picture_summary = json.loads((res_dir / "picture" / "summary.json").read_text(encoding="utf-8"))
+    loop_summary = {
+        k: json.loads((res_dir / "loop" / f"summary_{k}.json").read_text(encoding="utf-8"))
+        for k in ("untasked", "tasked")
+        if (res_dir / "loop" / f"summary_{k}.json").exists()
+    }
     writer = imageio.get_writer(
         args.out,
         fps=FPS,
@@ -1397,6 +1616,8 @@ def main() -> None:
         ("team", lambda: _with_view((-100.0, -38.0), 200.0, lambda: team_frames(team_res))),
         ("node results", lambda: slide_node_results(matrix)),
         ("cost", slide_cost),
+        ("air picture", lambda: picture_frames(picture_run)),
+        ("picture results", lambda: slide_picture_results(picture_summary, loop_summary)),
         ("standards", slide_standards),
         ("notes", slide_notes),
         ("next", slide_next),

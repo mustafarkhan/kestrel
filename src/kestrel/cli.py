@@ -71,7 +71,7 @@ def cmd_sim(args: argparse.Namespace) -> int:
         sc = sc.model_copy(update={"seed": args.seed})
     record = 3 if args.gif else 0
     sapient = None
-    if args.sapient:
+    if args.sapient or args.picture:
         from kestrel.interop.sapient import SapientExporter, SapientOptions
 
         sapient = SapientExporter(
@@ -81,6 +81,15 @@ def cmd_sim(args: argparse.Namespace) -> int:
                 seed=sc.seed,
             )
         )
+    air_picture = None
+    if args.picture:
+        from kestrel.rap.loop import AirPicture
+
+        if sc.sensors is None:
+            print("the scenario has no ground sensors (see scenarios/airfield_picture.yaml)")
+            return 2
+        assert sapient is not None
+        air_picture = AirPicture(sc, sapient, altitude_band_m=(0.0, cfg.safety.max_altitude))
     print(f"simulating '{sc.name}' (seed {sc.seed}) ...", flush=True)
     res = run(
         args.instruction,
@@ -90,8 +99,11 @@ def cmd_sim(args: argparse.Namespace) -> int:
         _parse_commands(args.command),
         record_every=record,
         sapient=sapient,
+        air_picture=air_picture,
     )
-    if sapient is not None:
+    if air_picture is not None:
+        print("recognised air picture:", json.dumps(air_picture.summary()))
+    if sapient is not None and args.sapient:
         sapient.write_jsonl(args.sapient)
         print(f"{len(sapient.messages)} SAPIENT messages written to {args.sapient}")
     out = Path(args.out)
@@ -130,6 +142,36 @@ def cmd_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_picture(args: argparse.Namespace) -> int:
+    from kestrel.rap.bench import CONFIGS, run_loop_benchmark, run_picture_benchmark
+
+    if args.loop:
+        cfg = load_config(args.config)
+        base = load_scenario(args.scenario or "scenarios/airfield_picture.yaml")
+        modes = {"both": (False, True), "on": (True,), "off": (False,)}[args.tasking]
+        seed0 = 8000 if args.seed0 is None else args.seed0
+        out = Path(args.out or "runs/loop")
+        summary = run_loop_benchmark(cfg, base, args.runs, seed0, out, args.jobs, modes, args.first)
+        print(json.dumps(summary, indent=2))
+        return 0
+    names = args.only.split(",") if args.only else list(CONFIGS)
+    seed0 = 7000 if args.seed0 is None else args.seed0
+    summary = run_picture_benchmark(
+        args.runs, seed0, Path(args.out or "runs/picture"), names, workers=args.jobs
+    )
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+def cmd_fuse(args: argparse.Namespace) -> int:
+    from kestrel.rap.replay import fuse_file
+
+    whitelist = [s for s in args.whitelist.split(",") if s] if args.whitelist else []
+    n = fuse_file(args.input, args.out, whitelist, args.period)
+    print(f"{n} detection reports fused; picture written to {args.out}")
+    return 0
+
+
 def cmd_fly(args: argparse.Namespace) -> int:
     from kestrel.live import MissionRejected, run_live
     from kestrel.mission.llm import MissionPlanner
@@ -155,7 +197,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="kestrel", description="Language-tasked aerial observer")
+    ap = argparse.ArgumentParser(prog="kestrel", description="Airborne sensor node for counter-drone defence")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
@@ -176,7 +218,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default="runs/latest")
     p.add_argument("--gif", action="store_true", help="also render demo.gif")
     p.add_argument("--seed", type=int)
-    p.add_argument("--sapient", metavar="PATH", help="also write SAPIENT (ICD v7) reports as JSON lines")
+    p.add_argument(
+        "--sapient", metavar="PATH", help="also write SAPIENT (BSI Flex 335 v2.0) messages as JSON lines"
+    )
+    p.add_argument(
+        "--picture",
+        action="store_true",
+        help="run the scenario's ground sensors and a fusion node that tasks Kestrel (needs `sensors:`)",
+    )
     p.add_argument(
         "--command",
         action="append",
@@ -202,6 +251,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default="runs/bench")
     common(p)
     p.set_defaults(func=cmd_bench)
+
+    p = sub.add_parser("picture", help="air-picture benchmark: each ground sensor alone and all fused")
+    p.add_argument("--runs", type=int, default=24)
+    p.add_argument("--seed0", type=int, help="first seed (default 7000; 8000 with --loop)")
+    p.add_argument("--jobs", type=int, default=2)
+    p.add_argument("--only", help="comma-separated configurations (default: all)")
+    p.add_argument("--out", help="output folder (default runs/picture; runs/loop with --loop)")
+    p.add_argument("--loop", action="store_true", help="fly Kestrel with the picture: listening, and tasked")
+    p.add_argument("--tasking", choices=("both", "on", "off"), default="both", help="with --loop")
+    p.add_argument("--first", type=int, default=0, help="with --loop: first encounter, to run in parts")
+    p.add_argument("--config", default="configs/birds.yaml", help="with --loop")
+    p.add_argument("--scenario", help="with --loop (default scenarios/airfield_picture.yaml)")
+    p.set_defaults(func=cmd_picture)
+
+    p = sub.add_parser("fuse", help="fuse a recorded SAPIENT log (JSON lines) into an air picture")
+    p.add_argument("input")
+    p.add_argument("--out", default="rap.jsonl")
+    p.add_argument("--whitelist", help="comma-separated Remote ID serials of friendly drones")
+    p.add_argument("--period", type=float, default=1.0, help="seconds between pictures")
+    p.set_defaults(func=cmd_fuse)
 
     p = sub.add_parser("fly", help="fly an ArduPilot vehicle over MAVLink (SITL or real)")
     p.add_argument("instruction")

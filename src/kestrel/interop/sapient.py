@@ -7,15 +7,18 @@ once a minute, and sends a detection report per object it sees. This module buil
 messages from Kestrel's state so its output can feed a SAPIENT fusion node next to other
 sensors.
 
-Field names, enumerations and units follow the published Interface Control Document,
-version 7.0 (Dstl, January 2023): the ``SapientMessage`` wrapper (``timestamp``,
-``node_id``, one content field), ``Registration``, ``StatusReport`` and
-``DetectionReport``. Messages are produced as dictionaries in the proto3 JSON layout
-(oneof member as the key, enum values by name, ``Timestamp`` as RFC 3339). The ICD's
-wire format is protobuf binary with a 4-byte little-endian length prefix over TCP; the
-``.proto`` files are available from Dstl on request rather than published, so the binary
-encoding is a mechanical step left to whoever holds them. No conformance test against a
-SAPIENT test harness has been run.
+Field names, enumerations and units follow Dstl's published protobuf schema for BSI
+Flex 335 v2.0 (https://github.com/dstl/SAPIENT-Proto-Files, vendored under
+``third_party/sapient-protos``), and the message set of the Interface Control Document v7.0
+(Dstl, 2023) it descends from: the ``SapientMessage`` wrapper (``timestamp``, ``node_id``,
+optional ``destination_id``, one content field), ``Registration``, ``StatusReport``,
+``DetectionReport`` and ``TaskAck``. Messages are produced as dictionaries in the proto3 JSON
+layout (oneof member as the key, enum values by name, ``Timestamp`` as RFC 3339), and the
+test suite parses every kind Kestrel writes against both the v1.0 and v2.0 schemas
+(``tests/test_sapient_conformance.py``). The wire format is protobuf binary with a 4-byte
+little-endian length prefix over TCP; with the schema compiled, the JSON converts to it
+with ``google.protobuf.json_format``. No run against a SAPIENT test harness or fusion node
+has been made.
 
 Mapping choices, each stated rather than hidden:
 
@@ -27,11 +30,6 @@ Mapping choices, each stated rather than hidden:
   acoustic network (``NODE_TYPE_ACOUSTIC``). An acoustic fix has no altitude, so it is sent
   at the middle of the altitude band with ``z_error`` covering the band, never on the
   ground plane (which is what the ICD assumes when ``z`` is omitted).
-* **Oneof members**: where the ICD names a ``oneof`` but not its members (``LocationType``'s
-  ``coordinates_oneof`` and ``datum_oneof``; the location and velocity oneofs of
-  ``DetectionReport``), the member names here are the snake_case of the type
-  (``location``, ``enu_velocity``, ``location_units``, ``location_datum``) and must be checked
-  against the ``.proto`` files.
 * **Classification**: class names are configurable. The ICD's taxonomy appendix was not
   available when this was written, so ``"UAV"`` and ``"Bird"`` are placeholders to be
   aligned with it.
@@ -55,7 +53,7 @@ from kestrel.interop.utm import enu_to_lla, from_utm, lla_to_enu, to_utm, zone_o
 from kestrel.perception.acoustic import AcousticFix
 from kestrel.perception.tracker import TrackEstimate
 
-ICD_VERSION = "7.0"
+ICD_VERSION = "BSI Flex 335 v2.0"
 Message = dict[str, Any]
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
@@ -127,6 +125,25 @@ class SapientExporter:
     def _ulid(self, t: float) -> str:
         return ulid(int((self.opts.epoch_s + t) * 1000), self._rng)
 
+    def new_node_id(self) -> str:
+        """A fresh UUID v4 for another node sharing this exporter's frame and random stream."""
+        return self._uuid()
+
+    def new_ulid(self, t: float) -> str:
+        return self._ulid(t)
+
+    def timestamp(self, t: float) -> str:
+        return rfc3339(self.opts.epoch_s + t)
+
+    def sim_time(self, timestamp: str) -> float:
+        """Seconds since this exporter's epoch of an RFC 3339 timestamp (any fraction digits)."""
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return dt.timestamp() - self.opts.epoch_s
+
+    @property
+    def camera_node_id(self) -> str:
+        return self.camera.node_id
+
     def _emit(self, t: float, node: _Node, content_key: str, content: Message) -> None:
         msg = {"timestamp": rfc3339(self.opts.epoch_s + t), "node_id": node.node_id, content_key: content}
         if not self.link_ok:
@@ -185,7 +202,6 @@ class SapientExporter:
             },
             "command": [
                 {
-                    "name": "LookAt",
                     "units": "locationList",
                     "completion_time": _duration(60),
                     "type": "COMMAND_TYPE_LOOK_AT",
@@ -209,20 +225,31 @@ class SapientExporter:
     def look_at(self, msg: Message) -> tuple[str, Vec] | None:
         """If ``msg`` is a task asking this node to look at an area, return its id and centre.
 
-        The Task message table itself (ICD section 6.5) was not available when this was
-        written; the field path read here (``task.task_id``, ``task.command.look_at.locations``)
-        is an assumption to align with the ``.proto`` files. The command type, LOOK_AT with a
-        location list, is from the ICD's command definition (5.6.9).
+        The field path is Dstl's published protobuf (BSI Flex 335 v1.0 and v2.0):
+        ``task.command.look_at`` is a ``LocationOrRangeBearing`` whose ``location_list`` holds
+        the locations. A bare ``look_at.locations`` list, as earlier Kestrel versions wrote,
+        is also read.
+        """
+        detail = self.look_at_detail(msg)
+        return None if detail is None else (detail[0], detail[1])
+
+    def look_at_detail(self, msg: Message) -> tuple[str, Vec, bool] | None:
+        """As :meth:`look_at`, plus whether the locations give a usable altitude.
+
+        A location whose ``z_error`` is under 15 m comes from a sensor that measured height
+        (a radar or a fused track); without one, the place is a vertical column, as an
+        acoustic or RF fix is.
         """
         task = msg.get("task")
         if not isinstance(task, dict):
             return None
         look = (task.get("command") or {}).get("look_at") or {}
-        locs = look.get("locations") or []
+        locs = (look.get("location_list") or {}).get("locations") or look.get("locations") or []
         if not locs:
             return None
         pts = np.array([self.to_enu(loc) for loc in locs])
-        return str(task.get("task_id", "")), pts.mean(axis=0)
+        z_known = all(float(loc.get("z_error", math.inf)) < 15.0 for loc in locs)
+        return str(task.get("task_id", "")), pts.mean(axis=0), z_known
 
     def task_ack(self, t: float, task_id: str, accepted: bool, reason: str = "") -> None:
         content: Message = {
@@ -241,12 +268,13 @@ class SapientExporter:
             "settle_time": _duration(0),
             "scan_type": "SCAN_TYPE_STEERABLE" if node is self.camera else "SCAN_TYPE_FIXED",
             "tracking_type": "TRACKING_TYPE_TRACK" if node is self.camera else "TRACKING_TYPE_NONE",
-            "detection_definition": {"location_type": self._location_type()},
-            "task": [self._look_at_definition()] if node is self.camera else [],
+            "detection_definition": [{"location_type": self._location_type()}],
             "mode_type": "MODE_TYPE_PERMANENT",
         }
+        if node is self.camera:
+            mode["task"] = self._look_at_definition()
         content = {
-            "node_type": [node.node_type],
+            "node_definition": [{"node_type": node.node_type}],
             "icd_version": ICD_VERSION,
             "name": node.name,
             "short_name": node.short_name,
@@ -272,7 +300,7 @@ class SapientExporter:
             "mode": mode,
         }
         if sensor_enu is not None:
-            content["sensor_location"] = self.location(sensor_enu)
+            content["node_location"] = self.location(sensor_enu)
         self._emit(t, node, "status_report", content)
         node.last_status_t = t
         node.last_mode = mode

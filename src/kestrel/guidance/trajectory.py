@@ -47,7 +47,7 @@ def fillet(points: Vec, radius: float) -> Vec:
         ua, ub = a / la, b / lb
         cosang = float(np.clip(ua @ ub, -1.0, 1.0))
         ang = math.acos(cosang)
-        if ang > math.pi - 1e-3:  # straight through
+        if ang > math.pi - 1e-3 or ang < 1e-3:  # straight through, or a full reversal
             out.append(p1)
             continue
         cut = min(radius / math.tan(ang / 2), 0.45 * la, 0.45 * lb)
