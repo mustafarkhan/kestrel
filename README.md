@@ -197,12 +197,33 @@ Reproduce any row with the command in [docs/results/matrix.json](docs/results/ma
 ### The air picture
 
 24 situations over a 1.6 km area around an airfield (seeds 7000-7023, never used while developing), 10 minutes
-each: seven drones (fixed-wing and multirotor, with and without radio links, Remote ID or engines, two of them
-friendly with whitelisted serials) and twelve birds, against a radar, three RF direction finders, a Remote ID
-receiver and an acoustic grid. In 10 of the 24 a spoofer broadcasts a friend's serial from a false position. The
-same situations are scored with each sensor alone and with all of them fused ([air-picture.md](docs/air-picture.md)).
+each: six drones (three hostile: one with a radio link, one radio-silent with an engine, one radio-silent and quiet;
+two friendly with whitelisted Remote ID serials; one civil) and twelve birds, against a radar, four RF direction
+finders, a Remote ID receiver and an acoustic grid. In 10 of the 24 a seventh drone, a spoofer, broadcasts a
+friend's serial from a false position. The same situations are scored with each sensor alone and with all of them
+fused ([air-picture.md](docs/air-picture.md)).
 
-PICTURE_TABLE
+| sensors | hostile drone-time covered | drone-time shown as UAV | bird-time shown as UAV | friend-time shown as friend | hostile shown as friend / phantom friend (total) | duplicate track ratio | track ids per drone | GOSPA |
+|---|---|---|---|---|---|---|---|---|
+| radar alone | 78% | 72% | 0% | 0% | 0 s / 0 s | 0.000 | 1.38 | 31.8 m |
+| RF direction finders alone | 34% | 100% | 0% | 0% | 0 s / 0 s | 0.000 | 1.43 | 66.7 m |
+| acoustic grid alone | 62% | 100% | 0% | 0% | 0 s / 0 s | 0.000 | 1.71 | 57.0 m |
+| Remote ID alone | 0% | 100% | 0% | 0% | 0 s / 10 s | 0.000 | 1.01 | 59.3 m |
+| all fused, no whitelist | 78% | 96% | 2% | 0% | 0 s / 0 s | 0.001 | 1.50 | 32.5 m |
+| all fused | 78% | 96% | 2% | 82% | 2 s / 16 s | 0.001 | 1.50 | 32.5 m |
+
+Fusion is about knowing what a track is, more than about seeing more. The radar finds as many hostile drones as
+everything together (78% of the hostile drone-time), but on its own it calls only 72% of drone-time *UAV* and
+leaves the rest unknown, because a micro-Doppler score is a weak opinion. Fused, 96% of drone-time is shown as *UAV*
+and 2% of bird-time as *UAV*; the RF, acoustic and Remote ID nodes hear only drones, so they settle the class
+wherever they reach. The fourth of hostile drone-time no sensor covers is low, radio-silent and quiet drones
+beyond the radar's clutter horizon: fusion cannot report what no sensor saw, which is where an airborne node is
+sent. Friendly drones are shown as *friend* 82% of the time (never without an independent sensor in the right
+place). Remote ID alone shows a spoofer's broadcast as a friend where no friend is (10 s); fused, the clone rule
+keeps every copy of a cloned serial from being a friend, and the 16 s of phantom friend left come from two spoofer
+runs in which the false position lay within 50 m of the real friend, inside the radar's gate. The 2 s of a hostile
+shown as friend are close crossings, where the friendly track passed within 2 m of a hostile and the scoring
+matched the hostile to it.
 
 Then Kestrel flies with the picture: standing by at the hangar for 4 minutes while a radio-silent, quiet drone
 the radar sees but cannot classify comes in, alongside a friendly drone and the birds (seeds 8000-8023). Either
@@ -212,8 +233,6 @@ the picture only listens to Kestrel's reports, or it tasks Kestrel to go and loo
 |---|---|---|---|---|---|---|---|---|
 | picture without tasking | 20/24 | 7 s / 80 s | 83% | 0% | 0.0 | 24/24 | 0/24 | 44.6 m |
 | picture tasks Kestrel | 23/24 | 16 s / 46 s | 92% | 0% | 7.2 | 24/24 | 0/24 | 12.4 m |
-
-PICTURE_TEXT
 
 Tasking classified the hostile drone in 23 of 24 encounters against 20, and cut the 90th percentile from first
 track to *UAV* from 80 s to 46 s. The median rose from 7 to 16 s only because tasking adds the hard cases: on the

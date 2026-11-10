@@ -115,7 +115,34 @@ throughout.
 
 ## Results
 
-Filled in from `docs/results/picture/` and `docs/results/loop/`; see the README tables.
+The tables are in the [README](../README.md#the-air-picture), generated from
+`docs/results/picture/` and `docs/results/loop/` and checked against them in CI. Reproduce with
+`kestrel picture --runs 24 --seed0 7000` and `kestrel picture --loop --runs 24 --seed0 8000`
+(the loop benchmark can run in parts with `--first`; parts merge into one result).
+
+What the numbers say, and what the errors left are:
+
+* **Fusion settles the class more than it adds coverage.** Radar alone covers as much hostile
+  drone-time as everything fused (78%) but calls only 72% of drone-time *UAV*; fused, 96%, with
+  2% of bird-time shown as *UAV*. The hostile drone-time nobody covers is low, radio-silent,
+  quiet drones beyond the radar's clutter horizon.
+* **Phantom friend, 16 s in total**, from two spoofer runs (seeds 7002 and 7023) in which the
+  spoofed position lay within 50 m of the real friend: inside the radar's gate, so the radar
+  corroborated a broadcast it was in fact seeing the real friend for. The clone rule stops any
+  copy being *friend* only while both broadcasts are live.
+* **Hostile shown as friend, 2 s in total**, are scoring artefacts during close crossings: in
+  seed 7010 the friendly track passed 2 m from a hostile, in 7016 the friend was within 1–2 m of
+  its own track while a hostile was about 20 m away, and the assignment matched the hostile to
+  the friend's track for a scan or two.
+* **Tasking Kestrel** classified the radio-silent hostile in 23 of 24 encounters against 20 of
+  24 untasked, and cut the 90th percentile from first track to *UAV* from 80 s to 46 s. On the 19
+  encounters classified both ways, tasking was faster in 7 and never slower; the median rose (7
+  to 16 s) because the encounters only tasking classified are the slow ones. The cost is
+  proximity: closest approach 12.4 m tasked against 44.6 m standing by, no run inside 12 m.
+* **The fault the loop found.** Before the picture shared its 3-D tracks with Kestrel, one tasked
+  look flew under the hostile drone the radar held 10 m above Kestrel, out of the camera's view,
+  and lost well clear for 1.5 s. With the traffic, the same encounter's closest approach is
+  23.8 m. Every loop encounter was flown again with the fix.
 
 ## Limits
 
