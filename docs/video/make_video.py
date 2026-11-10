@@ -1065,6 +1065,97 @@ def slide_picture_results(picture: dict[str, Any], loop: dict[str, Any]) -> list
     return list(faded(hold(r, 13.0)))
 
 
+# --------------------------------------------------------------------------- night
+
+
+def _night_views() -> list[tuple[str, np.ndarray, list[tuple[int, int, int, int]], tuple[float, float]]]:
+    """The same drone at 35 m seen by a visible camera by day and by night and a thermal camera by night."""
+    from kestrel.config import CameraParams
+    from kestrel.geometry import quat_from_euler
+
+    views = []
+    for title, camp, light in (
+        ("visible camera, day", CameraParams(), "day"),
+        ("visible camera, night", CameraParams(), "night"),
+        (
+            "thermal camera, night",
+            CameraParams(band="thermal", width=320, height=256, hfov_deg=50.0),
+            "night",
+        ),
+    ):
+        cam = Camera(camp, (0.0, 0.0, 0.0))
+        cfg = load_config(ROOT / "configs" / "default.yaml")
+        det = SkyTargetDetector(cam, cfg.detector, "bright" if camp.band == "thermal" else "dark")
+        ren = SkyRenderer(cam, seed=12, band=camp.band, light=light)
+        pose = cam.pose(np.array([0.0, 0.0, 25.0]), quat_from_euler(0.0, 0.0, 0.3), 8.0)
+        az, el = 0.3 + math.radians(6.0), math.radians(12.0)
+        tgt = np.array([0.0, 0.0, 25.0]) + 35.0 * np.array(
+            [math.cos(az) * math.cos(el), math.sin(az) * math.cos(el), math.sin(el)]
+        )
+        img = ren.render(pose, [(tgt, 0.35, 0.3)], camp.noise_sigma)
+        uv = cam.project(pose, tgt)
+        boxes = [d.bbox for d in det.detect(img, pose)]
+        views.append((title, img, boxes, (uv[0], uv[1]) if uv else (-1.0, -1.0)))
+    return views
+
+
+def slide_night(matrix: dict[str, Any]) -> list[Image.Image]:
+    views = _night_views()
+    sets = {st["key"]: st["summary"] for st in matrix["sets"]}
+    rows = [("single", "one camera, day"), ("night_visible", "one camera, night"),
+            ("night_thermal", "thermal camera, night"), ("night_thermal_acoustic", "thermal + microphones, night")]  # fmt: skip
+
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text((60, 40), "16  Night: what the camera sees", fill=BLUE, font=sans(26, "SemiBold"))
+        pw = 370
+        for i, (title, img, boxes, (u, v)) in enumerate(views):
+            x = 60 + i * (pw + 25)
+            h0, w0 = img.shape[:2]
+            ph = int(pw * h0 / w0)
+            pic = Image.fromarray(img).resize((pw, ph), Image.Resampling.NEAREST)
+            im.paste(pic, (x, 120))
+            k = pw / w0
+            for x0, y0, x1, y1 in boxes:
+                d.rectangle(
+                    [x + x0 * k - 6, 120 + y0 * k - 6, x + x1 * k + 6, 120 + y1 * k + 6],
+                    outline=AQUA,
+                    width=2,
+                )
+            seen = any(x0 - 3 <= u <= x1 + 3 and y0 - 3 <= v <= y1 + 3 for x0, y0, x1, y1 in boxes)
+            d.text((x, 86), title, fill=INK, font=sans(20, "Medium"))
+            d.text((x, 120 + ph + 8), "drone detected" if seen else "drone not detected",
+                   fill=AQUA if seen else ORANGE, font=sans(18, "SemiBold"))  # fmt: skip
+        if t > 1.5:
+            y = 470
+            for name, x in (("same 24 encounters", 60), ("runs inside 12 m", 420), ("closest", 640),
+                            ("encounters detected", 800)):  # fmt: skip
+                d.text((x, y), name, fill=MUTED, font=sans(16))
+            for j, (key, label) in enumerate(rows):
+                sm = sets.get(key)
+                if sm is None:
+                    continue
+                yy = y + 30 + 34 * j
+                n = sm.get("runs", 24)
+                closest = sm.get("min_separation_m", {}).get("min")
+                d.text(
+                    (60, yy),
+                    label,
+                    fill=AQUA if key == "night_thermal_acoustic" else INK,
+                    font=sans(20, "Medium"),
+                )
+                d.text((420, yy), f"{sm.get('separation_violations', 0)}/{n}", fill=INK, font=mono(20))
+                d.text(
+                    (640, yy), f"{closest:.1f} m" if closest is not None else "n/a", fill=INK, font=mono(20)
+                )
+                d.text((800, yy), f"{sm.get('encounters_detected', 0)}/{n}", fill=INK, font=mono(20))
+        footer(d, "rendered frames, same seed; every number in docs/results/matrix.json (decision 0016)")
+        return im
+
+    return list(faded(hold(r, 11.0)))
+
+
 # --------------------------------------------------------------------------- birds
 
 
@@ -1404,7 +1495,7 @@ def slide_standards() -> list[Image.Image]:
         d = ImageDraw.Draw(im)
         d.text(
             (96, 60),
-            "16  Held against published standards and field reports",
+            "17  Held against published standards and field reports",
             fill=BLUE,
             font=sans(26, "SemiBold"),
         )
@@ -1456,7 +1547,7 @@ def slide_notes() -> list[Image.Image]:
         im = blank()
         d = ImageDraw.Draw(im)
         d.text(
-            (96, 70), "17  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
+            (96, 70), "18  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
         )
         for i, (prob, fix) in enumerate(NOTES):
             if t < 0.5 * i:
@@ -1472,22 +1563,22 @@ def slide_notes() -> list[Image.Image]:
 
 def slide_next() -> list[Image.Image]:
     rows = [
-        ("Not yet", "flown on a real airframe; tested on real air-to-air footage; certified for anything"),
+        ("Not yet", "flown on a real airframe; measured on real air-to-air footage; certified for anything"),
         (
             "Next",
             "deployment and testing with our systems and defence-technology partners",
         ),
         (
             "With",
-            "real sensor data in the picture (kestrel fuse reads recorded SAPIENT), night and thermal, "
-            "field trials against a target drone",
+            "real sensor data in the picture (kestrel fuse reads recorded SAPIENT), real footage through the "
+            "detector (kestrel evaluate), field trials against a target drone",
         ),
     ]
 
     def r(t: float) -> Image.Image:
         im = blank()
         d = ImageDraw.Draw(im)
-        d.text((96, 120), "18  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
+        d.text((96, 120), "19  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
         for i, (k, v) in enumerate(rows):
             if t < 0.6 * i:
                 continue
@@ -1618,6 +1709,7 @@ def main() -> None:
         ("cost", slide_cost),
         ("air picture", lambda: picture_frames(picture_run)),
         ("picture results", lambda: slide_picture_results(picture_summary, loop_summary)),
+        ("night", lambda: slide_night(matrix)),
         ("standards", slide_standards),
         ("notes", slide_notes),
         ("next", slide_next),
