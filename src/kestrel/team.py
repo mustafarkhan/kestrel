@@ -94,7 +94,9 @@ class _Observer:
         self.scenario = scenario
         self.world = SimWorld(cfg, scenario)
         self.vehicle = SimVehicle(self.world, cfg.state_noise, seed=scenario.seed + 100 * k)
-        self.perc = Perception(cfg, scenario.seed, scenario.world.surface)  # same sky for everyone
+        self.perc = Perception(
+            cfg, scenario.seed, scenario.world.surface, scenario.world.light
+        )  # same sky for everyone
         self.perc.renderer.rng = np.random.default_rng(scenario.seed + 2000 + 100 * k)  # own sensor noise
         self.executive = Executive(mission, cfg, scenario.world, avoidance=avoidance)
         # Cross-cueing: tracks are shared, so an observer turns its camera to a contact its

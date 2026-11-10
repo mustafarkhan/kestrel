@@ -18,16 +18,71 @@ from kestrel.geometry import Vec, rot_z
 from kestrel.perception.camera import Camera, CameraPose
 from kestrel.sim.birds import BirdState
 
-_SKY_ZENITH = np.array([92.0, 140.0, 205.0])
-_SKY_HORIZON = np.array([200.0, 214.0, 228.0])
-_CLOUD = np.array([238.0, 240.0, 244.0])
-_GROUND_A = np.array([70.0, 88.0, 52.0])
-_GROUND_B = np.array([104.0, 96.0, 70.0])
-_TARGET = np.array([42.0, 42.0, 46.0])
-_BIRD = np.array([52.0, 46.0, 40.0])
-_SEA_A = np.array([28.0, 52.0, 70.0])
-_SEA_B = np.array([46.0, 74.0, 92.0])
 R_MIN_PX = 0.35  # smallest disc the 4x supersampling grid draws reliably
+
+
+def _grey(v: float) -> np.ndarray:
+    return np.array([v, v, v])
+
+
+# Scene colours per (band, light). Visible values are 8-bit sRGB. Thermal values are an 8-bit
+# long-wave infrared image (white hot) spanning roughly -40 to +60 degC apparent temperature:
+# clear sky is cold and coldest at the zenith (the atmospheric path is shortest), cloud bases
+# are warmer than clear sky, the ground and the sea are warmer still, and a drone's motors,
+# speed controllers and battery are the warmest things in the frame. A bird's insulated
+# feathers keep its surface near ambient, so it shows, but less than a drone.
+PALETTES: dict[tuple[str, str], dict[str, np.ndarray]] = {
+    ("visible", "day"): {
+        "zenith": np.array([92.0, 140.0, 205.0]),
+        "horizon": np.array([200.0, 214.0, 228.0]),
+        "cloud": np.array([238.0, 240.0, 244.0]),
+        "ground_a": np.array([70.0, 88.0, 52.0]),
+        "ground_b": np.array([104.0, 96.0, 70.0]),
+        "sea_a": np.array([28.0, 52.0, 70.0]),
+        "sea_b": np.array([46.0, 74.0, 92.0]),
+        "target": np.array([42.0, 42.0, 46.0]),
+        "bird": np.array([52.0, 46.0, 40.0]),
+        "glint": np.array([90.0, 90.0, 90.0]),
+    },
+    # A moonless night away from city light: the sky is a few grey levels above black, and an
+    # unlit drone against it has almost no contrast.
+    ("visible", "night"): {
+        "zenith": np.array([5.0, 6.0, 10.0]),
+        "horizon": np.array([14.0, 15.0, 20.0]),
+        "cloud": np.array([19.0, 19.0, 23.0]),
+        "ground_a": np.array([6.0, 7.0, 6.0]),
+        "ground_b": np.array([9.0, 9.0, 8.0]),
+        "sea_a": np.array([5.0, 7.0, 10.0]),
+        "sea_b": np.array([8.0, 10.0, 13.0]),
+        "target": np.array([4.0, 4.0, 5.0]),
+        "bird": np.array([5.0, 5.0, 5.0]),
+        "glint": np.array([0.0, 0.0, 0.0]),
+    },
+    ("thermal", "day"): {
+        "zenith": _grey(35.0),
+        "horizon": _grey(110.0),
+        "cloud": _grey(125.0),
+        "ground_a": _grey(150.0),
+        "ground_b": _grey(172.0),
+        "sea_a": _grey(132.0),
+        "sea_b": _grey(140.0),
+        "target": _grey(205.0),
+        "bird": _grey(165.0),
+        "glint": _grey(0.0),
+    },
+    ("thermal", "night"): {
+        "zenith": _grey(25.0),
+        "horizon": _grey(95.0),
+        "cloud": _grey(110.0),
+        "ground_a": _grey(128.0),
+        "ground_b": _grey(145.0),
+        "sea_a": _grey(134.0),
+        "sea_b": _grey(140.0),
+        "target": _grey(200.0),
+        "bird": _grey(160.0),
+        "glint": _grey(0.0),
+    },
+}
 
 
 def _fractal_noise(rng: np.random.Generator, shape: tuple[int, int], beta: float = 2.4) -> Vec:
@@ -50,10 +105,18 @@ def _fractal_noise(rng: np.random.Generator, shape: tuple[int, int], beta: float
 
 class SkyRenderer:
     def __init__(
-        self, camera: Camera, seed: int = 0, cloud_cover: float = 0.35, surface: str = "land"
+        self,
+        camera: Camera,
+        seed: int = 0,
+        cloud_cover: float = 0.35,
+        surface: str = "land",
+        band: str = "visible",
+        light: str = "day",
     ) -> None:
         self.cam = camera
         self.surface = surface
+        self.band, self.light = band, light
+        self.pal = {k: v.astype(np.float32) for k, v in PALETTES[(band, light)].items()}
         rng = np.random.default_rng(seed + 1000)
         # equirectangular cloud map: azimuth [-pi, pi) x elevation [0, pi/2]
         self.cloud_map = _fractal_noise(rng, (256, 1024))
@@ -69,7 +132,7 @@ class SkyRenderer:
         self.rays = (rays / np.linalg.norm(rays, axis=-1, keepdims=True)).astype(np.float32)
         # sky colour as a lookup on sin(elevation): avoids per-pixel trig and powers
         t = np.linspace(0.0, 1.0, 1024)[:, None] ** 0.6
-        self.sky_lut = (_SKY_HORIZON * (1 - t) + _SKY_ZENITH * t).astype(np.float32)
+        self.sky_lut = (self.pal["horizon"] * (1 - t) + self.pal["zenith"] * t).astype(np.float32)
         # sensor noise pool, sampled at a random offset each frame
         n = camera.width * camera.height
         self.noise_pool = self.rng.standard_normal(4 * n).astype(np.float32)
@@ -101,7 +164,7 @@ class SkyRenderer:
         cj = (az + math.pi) * (1024.0 / (2 * math.pi))
         alpha = ndimage.map_coordinates(self.cloud_alpha, [ci.ravel(), cj.ravel()], order=1, mode="grid-wrap")
         a = (alpha.reshape(h, w) * np.clip(el * 12.0, 0.0, 1.0)).astype(np.float32)[..., None]
-        img = img + (_CLOUD.astype(np.float32) - img) * a
+        img = img + (self.pal["cloud"] - img) * a
 
         # --- ground: textured plane with haze towards the horizon
         if not sky.all():
@@ -118,16 +181,16 @@ class SkyRenderer:
                 ti = (gx * 6.0).astype(np.int64) % 512
                 tj = (gy * 2.0).astype(np.int64) % 512
                 tex = np.clip(0.5 + 0.3 * self.ground_tex[ti, tj], 0.0, 1.0).astype(np.float32)[..., None]
-                col = _SEA_A.astype(np.float32) + (_SEA_B - _SEA_A).astype(np.float32) * tex
+                col = self.pal["sea_a"] + (self.pal["sea_b"] - self.pal["sea_a"]) * tex
                 gi = (gx * 23.0 + gy * 7.0).astype(np.int64) % 512
                 gj = (gy * 19.0 - gx * 5.0).astype(np.int64) % 512
                 glint = (self.ground_tex[gi, gj] > 2.4) & (rng_g < 400.0)
-                col = np.where(glint[..., None], col + np.float32(90.0), col)
+                col = np.where(glint[..., None], col + self.pal["glint"], col)
             else:
                 tex = np.clip(0.5 + 0.25 * self.ground_tex[ti, tj], 0.0, 1.0).astype(np.float32)[..., None]
-                col = _GROUND_A.astype(np.float32) + (_GROUND_B - _GROUND_A).astype(np.float32) * tex
+                col = self.pal["ground_a"] + (self.pal["ground_b"] - self.pal["ground_a"]) * tex
             haze = np.clip(rng_g / 1500.0, 0.0, 0.85).astype(np.float32)[..., None]
-            col = col + (_SKY_HORIZON.astype(np.float32) - col) * haze
+            col = col + (self.pal["horizon"] - col) * haze
             img = np.where(sky[..., None], img, col)
 
         for pos, span, yaw in targets:
@@ -148,7 +211,7 @@ class SkyRenderer:
         for k in range(4):
             ang = math.pi / 4 + k * math.pi / 2
             parts.append((rz @ np.array([math.cos(ang), math.sin(ang), 0.0]) * span * 0.36, 0.16 * span))
-        self._draw_parts(img, pose, pos, span, parts, _TARGET)
+        self._draw_parts(img, pose, pos, span, parts, self.pal["target"])
 
     def _draw_bird(self, img: np.ndarray, pose: CameraPose, b: BirdState) -> None:
         """Body along the flight direction plus two wings whose extent and height follow the beat."""
@@ -162,7 +225,7 @@ class SkyRenderer:
             for side in (1.0, -1.0):
                 off = left * side * frac * 0.5 * s * b.spread + np.array([0.0, 0.0, b.tip_dz * frac])
                 parts.append((off, 0.075 * s * (1.0 - 0.3 * frac)))
-        self._draw_parts(img, pose, b.pos, s, parts, _BIRD)
+        self._draw_parts(img, pose, b.pos, s, parts, self.pal["bird"])
 
     def _draw_parts(
         self,

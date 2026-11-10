@@ -54,9 +54,14 @@ def to_gray(rgb: np.ndarray) -> np.ndarray:
 
 
 class SkyTargetDetector:
-    def __init__(self, camera: Camera, params: DetectorParams) -> None:
+    def __init__(self, camera: Camera, params: DetectorParams, polarity: str = "dark") -> None:
+        """``polarity`` is ``"dark"`` for targets darker than the sky (a visible camera by day)
+        or ``"bright"`` for targets warmer than the sky (a thermal camera, white hot). A
+        bright-target frame is inverted and then runs the same pipeline, so every gate keeps
+        its meaning: "darker than clear sky" becomes "warmer than the coldest sky nearby"."""
         self.cam = camera
         self.p = params
+        self.invert = polarity == "bright"
         self._rows = np.arange(camera.height)[:, None]
         self._margin_px = camera.fy * math.tan(math.radians(params.horizon_margin_deg))
         self.last_response: np.ndarray | None = None
@@ -78,6 +83,8 @@ class SkyTargetDetector:
     def detect(self, rgb: np.ndarray, pose: CameraPose) -> list[Detection]:
         p = self.p
         gray = to_gray(rgb)
+        if self.invert:
+            gray = 255.0 - gray
         closed = ndimage.grey_closing(gray, size=(p.tophat_size, p.tophat_size))
         resp = closed - gray
         mask = self.sky_mask(pose)
