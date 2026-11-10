@@ -10,7 +10,7 @@ birds. ``run_picture`` flies it with any subset of the sensors and scores the re
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -29,10 +29,10 @@ from kestrel.config import (
 )
 from kestrel.geofence import Geofence
 from kestrel.interop.sapient import SapientExporter, SapientOptions
-from kestrel.rap.fusion import FusionNode, Message
+from kestrel.rap.fusion import FusionNode, Message, RapTrack
 from kestrel.rap.score import PictureScore
 from kestrel.rap.sensors import SensorNetwork
-from kestrel.rap.truth import Truth
+from kestrel.rap.truth import Truth, TruthObject
 
 HALF_M = 800.0
 WHITELIST = ["KST-FRIEND-0001", "KST-FRIEND-0002"]
@@ -200,6 +200,7 @@ class PictureRun:
     fusion: FusionNode
     score: PictureScore
     messages: list[Message]
+    frames: list[tuple[float, list[TruthObject], list[RapTrack]]] = field(default_factory=list)
 
 
 def make_geo(scenario: Scenario, seed: int) -> SapientExporter:
@@ -214,8 +215,12 @@ def run_picture(
     whitelist: bool = True,
     dt: float = 0.5,
     keep_messages: bool = False,
+    record_every_s: float = 0.0,
 ) -> PictureRun:
-    """Fly the scenario's truth past the ground sensors; fuse and score every ``dt``."""
+    """Fly the scenario's truth past the ground sensors; fuse and score every ``dt``.
+
+    ``record_every_s`` > 0 keeps the truth and the picture at that interval, for replay.
+    """
     assert scenario.sensors is not None, "scenario has no sensor network"
     net_cfg = scenario.sensors
     geo = make_geo(scenario, scenario.seed)
@@ -225,6 +230,8 @@ def run_picture(
     score = PictureScore()
     fence = Geofence(scenario.world.fence)
     messages: list[Message] = []
+    frames: list[tuple[float, list[TruthObject], list[RapTrack]]] = []
+    next_record = 0.0
     t = 0.0
     while t <= scenario.max_duration_s:
         objects = truth.objects(t)
@@ -233,6 +240,10 @@ def run_picture(
             if keep_messages:
                 messages.append(msg)
         fusion.step(t)
-        score.add(t, dt, objects, fusion.picture(t), fusion, fence)
+        picture = fusion.picture(t)
+        score.add(t, dt, objects, picture, fusion, fence)
+        if record_every_s > 0.0 and t >= next_record - 1e-9:
+            frames.append((t, objects, picture))
+            next_record += record_every_s
         t = round(t + dt, 6)
-    return PictureRun(scenario, fusion, score, messages)
+    return PictureRun(scenario, fusion, score, messages, frames)
