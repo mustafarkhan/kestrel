@@ -45,7 +45,7 @@ only for what they say about *sensing*.
 
 | Need | Source | Kestrel |
 |---|---|---|
-| A common message standard for counter-UAS sensors, so systems from different nations and companies feed one picture | SAPIENT (Dstl, BSI Flex 335), trialled at NATO's counter-UAS Technical Interoperability Exercise with 17 sensor and 7 decision modules, in NATO standardisation since 2024 [12, 13]; the ECFR calls for common standards and certification with NATO and one command-and-control node fed by every flank detection station [14] | **Implements** a SAPIENT ICD v7 export: registration, status and detection reports from two nodes (airborne cameras, ground acoustic network), UTM coordinates with one-sigma errors (`interop/sapient.py`, `docs/interop.md`). Protobuf wire encoding and a conformance run are not done |
+| A common message standard for counter-UAS sensors, so systems from different nations and companies feed one picture | SAPIENT (Dstl, BSI Flex 335), trialled at NATO's counter-UAS Technical Interoperability Exercise with 17 sensor and 7 decision modules, adopted by NATO through STANREC/AEDP-4869 [12, 13, 22]; the ECFR calls for common standards and certification with NATO and one command-and-control node fed by every flank detection station [14] | **Implements** BSI Flex 335 v2.0 messages (registration, status, detection, task, task acknowledgement) from Kestrel, the simulated ground sensors and the fusion node, and **tests** every kind against Dstl's published protobuf schema [23] (`tests/test_sapient_conformance.py`, `docs/interop.md`). A run against a SAPIENT test harness or a third-party fusion node is not done |
 | Birds: radar and optical sensors raise false alarms on birds | ECFR [14]; the acoustic report [8] | **Implements** birds in the simulated sky (intermittent flapping and gliding, corvid-to-gull size) and a wing-beat flicker classifier on the track's brightness history (`perception/classify.py`). **Measures** bird tracks reported as drones with the classifier off and on. Gliding birds cannot be told apart by this cue |
 | Several drones at once | ECFR [14] ("multi-shot" defence against simultaneous drones); IISS [11] | **Measures** a two-intruder benchmark set. Engagement is out of scope; Kestrel detects, tracks, keeps clear and reports |
 | Sensors that can be tasked by the command node, not only report to it | SAPIENT task definitions, including the `LOOK_AT` command (ICD v7, 5.6.8–5.6.9) [12] | **Implements** a `LOOK_AT` task definition at registration and accepts and acknowledges such tasks, sending the observer to look ([0014](decisions/0014-sensor-node.md)). The Task message's own field names are not yet verified against the `.proto` files |
@@ -55,14 +55,36 @@ only for what they say about *sensing*.
 ## 5. Roadmap, in order
 
 1. Deployment and field testing with our systems and defence-technology partners: real sensor data,
-   multi-sensor network fusion over SAPIENT, and flights against a cooperating target drone. Public real
-   air-to-air footage (e.g. AOT [1]) as an independent check on the detector.
-2. Multi-frame, ego-motion-compensated detection, as in AirTrack [2].
-3. A tau-based well-clear definition compared against the current distance-based one [6].
-4. GNSS-integrity monitoring and multi-vehicle tasking.
-5. SAPIENT protobuf encoding from the Dstl `.proto` files and a run against the SAPIENT test harness.
-6. Thermal imagery for night operation; event cameras [4].
+   multi-sensor network fusion over SAPIENT, and flights against a cooperating target drone. The fusion
+   node already reads recorded SAPIENT traffic (`kestrel fuse`); the NATO counter-UAS data challenge
+   data [20] is the first real multi-sensor set to run it on.
+2. Night: thermal imagery and a thermal detector, benchmarked by day and night; the CST Anti-UAV
+   thermal benchmark [17] as the real-data check.
+3. Real-data evaluation of the detector on public air-to-air sets (Det-Fly, Drone-vs-Bird, DUT Anti-UAV
+   [18]) and of the acoustic layer on the 24-microphone localisation set [19].
+4. Multi-frame, ego-motion-compensated detection, as in AirTrack [2].
+5. Authenticated friendly-force tracking in place of Remote ID for *friend*; the SAPIENT `follow` task.
+6. A tau-based well-clear definition; GNSS-integrity monitoring.
 7. A Gazebo/ROS 2 bridge so the same autonomy runs against the photoreal simulators used in industry.
+
+## 6. 2026: what the front line, the market and NATO ask of the picture
+
+Researched for v0.4 (November 2026). The pattern across all three is the same: sensing and the
+picture are the gap, not effectors.
+
+| Finding | Source | Kestrel |
+|---|---|---|
+| Sensors, not interceptors, are the bottleneck. Interceptor units say "we just need better radar"; missions start from radar tracks, acoustic spotters and the battlefield management system; networked systems are starting to hand tracks between sectors | Defense News, March 2026 [16]; TWZ, May 2026 [24] | **Implements** the fusion node that builds one picture from radar, RF, acoustic, Remote ID and Kestrel, and hands its most uncertain track to the airborne camera (`rap/`, [air-picture.md](air-picture.md)) |
+| Every sensor class has a known blind spot: acoustic networks miss electric-motor variants, RF misses fibre-optic and GNSS/INS-guided drones, EO/IR needs cueing and good weather, radar struggles with low RCS and low altitude; multi-sensor fusion is "the only operationally validated approach" | Drone Warfare, April 2026 [28] | **Models** each blind spot (radio-silent drones, quiet propulsion, low-altitude clutter, birds on radar) and **measures** each sensor alone against all fused on the same situations |
+| Decoys (Gerbera, Parody) make up about a third of mass raids, to exhaust interceptors and overload detection | Defense News [16] | **Partly**: the picture separates drone from bird and identifies friends; telling a decoy from an armed drone is not modelled |
+| Europe's C-UAS demand: $5–7 billion by 2029 (about 58% a year), 4,000–5,000 systems; underserved: civil infrastructure, naval, and cross-border networking of sensors and C2; buyers want low unit cost, open standards, simple training and logistics | BCG, May 2026 [21] | **Consistent**: open SAPIENT interfaces end to end, a fusion node anyone can run on recorded traffic, a parts-cost airborne node |
+| EU drone wall (EDDI): initial capability by end-2026, full by end-2027; the sensors, networking and who builds the recognised air picture are still open | European Security & Defence, March 2026 [25] | **Consistent**: the picture is built from heterogeneous SAPIENT nodes, the open question the initiative leaves |
+| NATO C-UAS Data Challenge 2026: build one local recognised air picture from radar, RF, EO/IR, acoustic and cyber data from NATO exercises; remove duplicate tracks, fuse kinematics and attributes, classify (drone, bird, type), identify friend, hostile or unknown with white-listed identifiers; registration by 14 December 2026, submission by 21 December 2026, prizes up to €100,000 | NCIA [20] | **Implements** each task in simulation, scored with the same kinds of measure (GOSPA, duplicates, classification, identification). Running it on the challenge data needs registration by an eligible entity |
+| SAPIENT v2.0 (BSI Flex 335 v2.0): hierarchical fusion nodes, mobile nodes, run-time taxonomies; the protobuf schema is published; SAPIENT-compliant radar processing and multi-sensor fusion were validated at NATO's LCI-X Crucible exercise in Romania, April 2026 | GOV.UK [22]; Dstl [23]; Defence Online, August 2026 [26] | **Implements** v2.0 messages, tested against the published schema; tasks use `destination_id` and `look_at.location_list` as the schema defines |
+| EU direct Remote ID is mandatory for specific-category and class-marked drones since 1 January 2024 | EASA [27] | **Uses** it as cooperative identification, never as proof: *friend* needs an independent sensor to put the drone where it says it is, and a cloned serial is never a friend. Remote ID is not authenticated; that limit is stated |
+| Tiny targets are still the hard case: on the CST Anti-UAV thermal benchmark (ICCV 2025 workshop; 220 sequences, 78,224 targets under 10 px, day and night) the best trackers reach about 36% mSA | Xie et al. [17] | **Roadmap** (thermal and real-data evaluation, items 2 and 3) |
+| Lightweight detectors on public sets: YOLO11n with context-aware augmentation reaches 90.9% mAP50 on Det-Fly (air-to-air), 68.0% on Drone-vs-Bird | arXiv 2604.19999 [18] | **Roadmap**: Kestrel's detector is classical and untested on real footage |
+| A public 24-microphone acoustic localisation set with GPS ground truth (DJI Air 3), released July 2026 | Western Sydney University [19] | **Roadmap**; its terms reserve text-and-data-mining rights, to be checked before use |
 
 ## Sources
 
@@ -81,3 +103,16 @@ only for what they say about *sensing*.
 13. *SAPIENT becomes NATO standard for counter-drone systems* (June 2026). https://letsdatascience.com/news/sapient-becomes-nato-standard-for-counter-drone-systems-199eb30d
 14. ECFR, *Buzzkill: how to defend Europe against drones* (2026). https://ecfr.eu/publication/buzzkill-how-to-defend-europe-against-drones/
 15. *NATO conducts counter-drone training mission over Baltics* (Eastern Sentry), Defence Industry Europe. https://defence-industry.eu/nato-conducts-counter-drone-training-mission-over-baltics-to-reinforce-eastern-flank-air-defence-and-deterrence/ ; European Parliamentary Research Service, *Eastern Flank Watch and the European drone wall* (October 2025). https://epthinktank.eu/2025/10/23/eastern-flank-watch-and-european-drone-wall/
+16. Defense News, *Novel interceptor drones bend air-defense economics in Ukraine's favor* (5 March 2026). https://www.defensenews.com/global/europe/2026/03/05/novel-interceptor-drones-bend-air-defense-economics-in-ukraines-favor/
+17. Xie et al., *CST Anti-UAV: A Thermal Infrared Benchmark for Tiny UAV Tracking in Complex Scenes*, ICCV 2025 Workshops; arXiv:2507.23473. https://arxiv.org/html/2507.23473v2
+18. *Optimizing Data Augmentation for Real-Time Small UAV Detection: A Lightweight Context-Aware Approach*, arXiv:2604.19999. https://arxiv.org/pdf/2604.19999
+19. Rodriguez, Chevtchenko and Afshar, *UAV Acoustic Localization Dataset: 24-Channel Beamformed Recordings of a DJI Air 3 Drone with Synchronized GPS Flight Logs*, Western Sydney University (2026). https://doi.org/10.26183/07nm-4p35
+20. NCIA, *NATO C-UAS Data Challenge 2026*, challenge description. https://www.nato.int/content/dam/nato/webready/documents/nfdi/nfdi-C-UAS-DataChallenge.pdf ; event page: https://www.nato.int/en/work-with-us/business-and-project-opportunities/events/2026/12/nato-c-uas-data-challenge-2026
+21. BCG, *Countering the drone threat: Europe's C-UAS opportunity* (May 2026). https://www.bcg.com/assets/2026/white-paper-countering-the-drone-threat-europes-cuas-opportunity.pdf
+22. GOV.UK, *New milestone as BSI publishes updated SAPIENT standard* (BSI Flex 335 v2.0, March 2024). https://www.gov.uk/government/news/new-milestone-as-bsi-publishes-updated-sapient-standard
+23. Dstl, *SAPIENT Proto Files* (BSI Flex 335 v1.0 and v2.0 protobuf, Apache 2.0). https://github.com/dstl/SAPIENT-Proto-Files
+24. TWZ, *Inside Ukraine's Interceptor Drone Innovations Swatting Down Thousands Of Russian Shaheds* (May 2026). https://www.twz.com/news-features/inside-ukraines-interceptor-drone-innovations-swatting-down-thousands-of-shahed-drones
+25. European Security & Defence, *Europe's drone wall: ready, EDDI, go* (13 March 2026). https://euro-sd.com/2026/03/articles/exclusive/49854/europes-drone-wall-ready-eddi-go/
+26. Defence Online, *Cambridge Pixel validates SAPIENT-compliant radar processing at NATO counter-UAS exercise in Romania* (7 August 2026). https://www.defenceonline.co.uk/2026/08/07/cambridge-pixel-validates-sapient-compliant-radar-processing-at-nato-counter-uas-exercise-in-romania/
+27. EASA, *Remote identification will become mandatory for drones across Europe*. https://www.easa.europa.eu/en/document-library/general-publications/remote-identification-will-become-mandatory-drones-across
+28. Drone Warfare, *Countering the Shahed-136: Detection, Intercept, Cost* (16 April 2026). https://drone-warfare.com/counter-uas/countering-the-shahed-136/

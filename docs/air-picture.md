@@ -51,7 +51,9 @@ traffic (`kestrel fuse`).
 * **Kinematics.** A constant-velocity Kalman filter (3 m/s² process noise) with each report's
   errors as measurement noise. Acoustic and RF fixes carry no altitude; they are sent at the
   middle of the altitude band with a vertical error spanning it, so they constrain only the
-  horizontal position. The fused covariance is tested for consistency (mean NEES near 3).
+  horizontal position. The fused covariance is tested for consistency: on a radar-tracked
+  drone the mean normalised estimation error squared is 2.1–2.4 against 3 expected, so the
+  stated errors are slightly conservative.
 * **Duplicates.** Two tracks that stay inside each other's 95% gate for 2 s, and that no
   tracking sensor says are different objects, are merged into the older one.
 * **Class.** Drone-versus-bird evidence is a log-likelihood ratio. Each sensor node's opinion

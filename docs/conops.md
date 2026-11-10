@@ -50,6 +50,20 @@ Every step runs inside the same safety monitor: separation from every contact (b
 included), geofence, altitude band and energy are enforced on board whatever the
 mission or the tasking says.
 
+## The picture tasks the node
+
+From v0.4 the fusion node is part of Kestrel too ([air-picture.md](air-picture.md)). Ground
+radar, RF direction finders, a Remote ID receiver, microphones and Kestrel's camera all report
+into one recognised air picture. The picture removes duplicate tracks, fuses class evidence,
+and identifies: *friend* (our own Remote ID, corroborated by an independent sensor),
+*neutral* (a compliant civil drone, a bird), *suspect* (an unidentified drone near a protected
+site), *unknown*. **Hostile is an operator's decision; the picture never makes it.**
+
+The step this adds to the loop: the picture itself decides which track most needs a look
+(unresolved, nearest harm, not seen by a camera recently) and sends Kestrel the `LOOK_AT`
+task, re-sending the position as the aircraft moves, until Kestrel's camera has seen it and
+the picture can say what it is.
+
 ## Across the domains
 
 | domain | what Kestrel contributes | what it depends on |
@@ -58,7 +72,7 @@ mission or the tasking says.
 | **Land and infrastructure** | fills gaps between fixed sites; covers temporary sites | a station to stand by at; battery endurance |
 | **Maritime** | the same loop over water (harbours, berthed ships, offshore installations); sea rendered as the background below the horizon | shore or deck launch; sea-state effects on flight are not modelled |
 | **Electromagnetic** | keeps working when the ground link is jammed (configurable): continues the task on board for a bounded time, buffers reports and sends them with their original timestamps when the link returns | navigation still needs GNSS; visual navigation is roadmap |
-| **Information** | SAPIENT ICD v7 out (registration, status, detections) and in (`LOOK_AT` tasks, acknowledged) | conformance testing against a real fusion node is not done |
+| **Information** | SAPIENT (BSI Flex 335 v2.0) end to end: Kestrel's reports, the ground sensors, the fusion node's picture and its `LOOK_AT` tasks, all tested against Dstl's published schema; the picture can be rebuilt from a recorded log | a run against a third-party fusion node or the SAPIENT test harness is not done |
 | **Space** | nothing directly; GNSS and satellite backhaul are dependencies to design around | |
 
 ## Rules it keeps
@@ -116,5 +130,7 @@ Sources:
 
 ## Not done
 
-Real flight, real footage, thermal imagery, visual navigation under GNSS denial,
-conformance against a SAPIENT fusion node, and launch and recovery from a moving deck.
+Real flight, real footage, real sensor data in the picture, thermal imagery, visual
+navigation under GNSS denial, authenticated friendly-force tracking (Remote ID can be
+copied), a run against a third-party SAPIENT fusion node, and launch and recovery from a
+moving deck.
