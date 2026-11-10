@@ -26,13 +26,13 @@ to an operator), and tasks Kestrel to go and look where the ground sensors canno
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
-🎬 **[Project video (7 min 4 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
+🎬 **[Project video (7 min 15 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
 rejected unsafe plan, a closed-loop flight with birds and acoustic cueing, bird-versus-drone on real rendered pixels,
 SAPIENT output, the same code flying ArduCopter SITL, the measured results against a no-avoidance baseline, then the
 sensor-node role: standing by over a harbour, investigating acoustic cues and a C2 tasking, working through a jammed
 link, two observers triangulating one drone, the measured sensor-node results and the parts cost, then the air
 picture: five kinds of sensor fused into one picture that identifies friend from spoofer and tasks Kestrel, and
-its measured results.
+its measured results, and what a visible and a thermal camera see at night.
 Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
 
 | | how | measured |
