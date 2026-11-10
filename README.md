@@ -194,6 +194,35 @@ Ground sensors are what make the node fast. With the camera alone, waiting on st
 Reproduce any row with the command in [docs/results/matrix.json](docs/results/matrix.json); per-run rows are in
 `docs/results/<set>/results.csv`. A test fails CI if these tables and the committed results disagree.
 
+### The air picture
+
+24 situations over a 1.6 km area around an airfield (seeds 7000-7023, never used while developing), 10 minutes
+each: seven drones (fixed-wing and multirotor, with and without radio links, Remote ID or engines, two of them
+friendly with whitelisted serials) and twelve birds, against a radar, three RF direction finders, a Remote ID
+receiver and an acoustic grid. In 10 of the 24 a spoofer broadcasts a friend's serial from a false position. The
+same situations are scored with each sensor alone and with all of them fused ([air-picture.md](docs/air-picture.md)).
+
+PICTURE_TABLE
+
+Then Kestrel flies with the picture: standing by at the hangar for 4 minutes while a radio-silent, quiet drone
+the radar sees but cannot classify comes in, alongside a friendly drone and the birds (seeds 8000-8023). Either
+the picture only listens to Kestrel's reports, or it tasks Kestrel to go and look.
+
+| with Kestrel | hostile drones classified as UAV | first track to UAV (median / p90) | drone-time shown as UAV | drone-time shown as bird | looks flown per mission | missions completed | runs inside 12 m | closest approach |
+|---|---|---|---|---|---|---|---|---|
+| picture without tasking | 20/24 | 7 s / 80 s | 83% | 0% | 0.0 | 24/24 | 0/24 | 44.6 m |
+| picture tasks Kestrel | 23/24 | 16 s / 46 s | 92% | 0% | 7.2 | 24/24 | 0/24 | 12.4 m |
+
+PICTURE_TEXT
+
+Tasking classified the hostile drone in 23 of 24 encounters against 20, and cut the 90th percentile from first
+track to *UAV* from 80 s to 46 s. The median rose from 7 to 16 s only because tasking adds the hard cases: on the
+19 encounters classified both ways, tasking was faster in 7 and never slower. Untasked, Kestrel classified one
+encounter (236 s after the first track) that tasked it did not. The cost is proximity: sent to look, Kestrel came
+to 12.4 m of a drone at closest, against 44.6 m standing by, and no run went inside 12 m. That only holds since the
+picture's 3-D tracks reach Kestrel's separation filter: before, one tasked look flew under the hostile drone, held
+by the radar 10 m above Kestrel and out of its camera's view ([0015](docs/decisions/0015-air-picture.md)).
+
 ![Mission overview](docs/figures/overview.png)
 
 ![Separation, tracking error and altitude over the demo flight](docs/figures/timeline.png)
