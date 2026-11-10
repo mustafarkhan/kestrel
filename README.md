@@ -26,13 +26,13 @@ to an operator), and tasks Kestrel to go and look where the ground sensors canno
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
-🎬 **[Project video (7 min 4 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
+🎬 **[Project video (7 min 15 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
 rejected unsafe plan, a closed-loop flight with birds and acoustic cueing, bird-versus-drone on real rendered pixels,
 SAPIENT output, the same code flying ArduCopter SITL, the measured results against a no-avoidance baseline, then the
 sensor-node role: standing by over a harbour, investigating acoustic cues and a C2 tasking, working through a jammed
 link, two observers triangulating one drone, the measured sensor-node results and the parts cost, then the air
 picture: five kinds of sensor fused into one picture that identifies friend from spoofer and tasks Kestrel, and
-its measured results.
+its measured results, and what a visible and a thermal camera see at night.
 Rendered only from the repository's own outputs by [`docs/video/make_video.py`](docs/video/make_video.py).
 
 | | how | measured |
@@ -40,6 +40,7 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 | **Plan from language** | local LLM (Ollama) constrained to a JSON Schema, re-validated, one repair round, deterministic fallback; stop/abort/land bypass the model | malformed, invented-site and garbage outputs all rejected in tests; same plan with or without a model |
 | **Check before flight** | geofence, altitude band, speed, standoff vs. separation, battery energy with a traffic contingency | 7 of 216 benchmark runs used more than the estimate (worst 1.2×, two intruders giving way); none used more than 27 of the 62 Wh usable |
 | **See other aircraft** | small-target sky detector on rendered frames: black top-hat, robust threshold, horizon mask, darker-than-sky test | 0.35 m drone: every frame to 45 m, about half at 60 m |
+| **See at night** | long-wave thermal camera (320 × 256, 50°), white hot; the same detector on the inverted image ([0016](docs/decisions/0016-night-and-thermal.md)) | at night a visible camera tracked no drone in 24 encounters; thermal: 3/24 runs inside 12 m, with microphones 0/24 |
 | **Tell birds from drones** | wing-beat flicker in the track's brightness, scored against sensor noise | held out: no drone called a bird; 73% of flapping birds rejected; gliding birds not ([0009](docs/decisions/0009-birds.md)) |
 | **Hear what the camera cannot see** | ground microphone grid, 2° bearings, triangulated fixes that point the camera and widen the keep-out | see the results matrix |
 | **Track** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.6 m median position error while shadowing at ~30 m |
@@ -52,7 +53,7 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 | **Fly as a team** | two observers, one fused tracker, shared contacts, each other as cooperative traffic | intruder position error with two observers against one: see the sensor-node table |
 | **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink) | full mission flown on **ArduCopter 4.6.3 SITL in CI** |
 
-> **Status (November 2026, v0.4).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
+> **Status (November 2026, v0.5).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
 > a real airframe**, has not been evaluated on real air-to-air footage or real sensor feeds, and nothing is
 > flight-qualified. The camera, bird, aircraft and ground-sensor models are simplified. The known gaps are under [Limitations](#limitations), in
 > [docs/safety.md](docs/safety.md) and, against published standards, in [docs/research.md](docs/research.md).
@@ -100,6 +101,13 @@ kestrel sim "take off to 25 m and stand by at the hangar for 4 minutes" --comman
 
 # operator emergencies are injected by time: abort at t = 60 s
 kestrel sim "survey the north field at 25 m" --command "60:abort"
+
+# at night: a visible camera sees nothing; a thermal camera, with ground microphones
+kestrel sim "survey the north field at 25 m and follow any drone for 45 seconds" \
+  --config configs/thermal_acoustic.yaml --scenario scenarios/airfield_night.yaml
+
+# the detector on recorded footage with ground-truth boxes (Anti-UAV, YOLO or MOT layout)
+kestrel evaluate path/to/anti-uav --format anti-uav --polarity bright --out runs/eval.json
 
 # the air picture: ground sensors and Kestrel fused into one picture that tasks Kestrel
 kestrel sim "take off to 25 m, stand by at the hangar for 4 minutes, then return home" \
@@ -167,6 +175,10 @@ as a drone that never corresponds to one.
 | two intruders, no avoidance | 20/24 (30) | 1.3 m | 16/24 | 2.1 | 24/24 (0) |
 | two intruders, camera + acoustic | 4/24 (5) | 3.7 m | 15/24 | 2.3 | 12/24 (12) |
 | two intruders, two observers | 18/24 (32) | 1.3 m | 21/24 | 5.6 | 24/24 (0) |
+| night, one camera | 18/24 (23) | 3.6 m | 0/24 | 0.0 | 24/24 (0) |
+| night, thermal camera | 3/24 (3) | 1.4 m | 16/24 | 0.0 | 23/24 (1) |
+| night, thermal + acoustic | 0/24 (0) | 12.5 m | 20/24 | 0.0 | 20/24 (4) |
+| thermal camera by day | 1/24 (2) | 3.1 m | 15/24 | 0.0 | 23/24 (1) |
 
 | birds in the area | bird tracks | bird tracks reported as a drone | drone tracks reported as a drone |
 |---|---|---|---|
@@ -174,6 +186,8 @@ as a drone that never corresponds to one.
 | 4 birds + classifier | 26 | 8 | 84/96 |
 
 With one intruder, avoidance with one camera has a **risk ratio of 0.06**: 1 of 24 runs lost well clear, against 18 of 24 flying the same encounters without avoidance. Each added layer is measured on the same encounters. With two intruders the ratio is 0.75 (15 against 20 of 24), because one forward camera cannot watch two aircraft; the acoustic network brings it to 4 of 24, at the cost of 12 missions ending early for traffic ([0013](docs/decisions/0013-two-intruders.md)). Two observers against two intruders made it worse, not better: 18 of 24 runs had an observer inside 12 m (32 entries, about 16 per observer against 26 for one). A second aircraft in the same airspace is a second aircraft to keep apart, and cross-cueing, which turns the second camera to the drone the first is following, probably also turns it away from the other drone; that has not yet been traced run by run, and it is the next thing to fix. With birds in the area, the classifier cuts false alarms from 16.8 to 4.8 per flight hour. 8 of 26 bird tracks were still reported as drones (a gliding bird shows no wing-beat; [0009](docs/decisions/0009-birds.md)). 12 of 96 drone tracks were never reported as drones, being too faint or brief to classify; the safety monitor kept clear of them all the same.
+
+**At night** a visible camera is no sensor: it tracked no drone in 24 encounters, and the runs are identical to flying without avoidance (18 of 24 inside 12 m). A thermal camera restores most of the daytime protection (3 of 24), with no false alarms on warm clouds; its narrower 50° view is the cost: in two of the three runs that came close, the drone stayed outside it until too late. With the ground microphones as well, no run went inside 12 m at night (closest 12.5 m), at the same cost as by day: 4 missions ended early to give way to traffic ([0016](docs/decisions/0016-night-and-thermal.md)).
 
 ### The sensor node
 
@@ -295,15 +309,16 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | [0011](docs/decisions/0011-cues-identity-and-the-way-home.md) | giving way to cued aircraft already tracked; one drone followed three times; stuck on the way home | cues explained by a track dropped; aircraft identity across tracks; homeward yield cap |
 | [0012](docs/decisions/0012-contact-watch-memory.md) | camera kept staring at where an intruder had been a minute earlier while traffic came head-on | watch a stale contact for 15 s, then look where you are going: 3/24 → 1/24 runs inside 12 m |
 | [0013](docs/decisions/0013-two-intruders.md) | two intruders: one camera loses well clear in 15/24 runs, mostly to the aircraft it is not looking at | measured, explained; acoustic cueing cuts it to 4/24 at the cost of early returns |
-| [0015](docs/decisions/0015-air-picture.md) | class evidence summed over every report made birds certain; a spoofer inherited a friend's corroboration; tasked looks queued stale positions and left too early; a tasked look flew under a drone only the radar held | bounded per-sensor evidence; corroboration by an independent sensor and the clone rule; a look follows the track until it is resolved; the picture's 3-D tracks go to the separation filter |
 | [0014](docs/decisions/0014-sensor-node.md) | investigating from a climbing altitude put targets below the horizon; standby never ended under repeated cues; teammates tracked as intruders; two observers following one drone | hold mission altitude; standby time includes excursions; friendly by bearing, safety on all tracks; contacts claimed within the tick |
+| [0015](docs/decisions/0015-air-picture.md) | class evidence summed over every report made birds certain; a spoofer inherited a friend's corroboration; tasked looks queued stale positions and left too early; a tasked look flew under a drone only the radar held | bounded per-sensor evidence; corroboration by an independent sensor and the clone rule; a look follows the track until it is resolved; the picture's 3-D tracks go to the separation filter |
+| [0016](docs/decisions/0016-night-and-thermal.md) | every benchmark was flown by day; at night a visible camera sees nothing | thermal palette and a bright-target detector: 18/24 → 3/24 runs inside 12 m at night, 0/24 with microphones |
 
 ## Testing
 
 | job | what | runs |
 |---|---|---|
 | `lint` | ruff, ruff format, mypy `--strict` | every push |
-| `unit` | 127 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, SAPIENT messages parsed against the published v2.0 schema, UTM against PROJ, sensor blind spots, fusion consistency, friend/spoof/clone identification, LLM planner against a local HTTP server, README tables against the committed results | Python 3.11, 3.12, 3.13 |
+| `unit` | 138 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, night and thermal detection, the real-data evaluation harness in three layouts, SAPIENT messages parsed against the published v2.0 schema, UTM against PROJ, sensor blind spots, fusion consistency, friend/spoof/clone identification, LLM planner against a local HTTP server, README tables against the committed results | Python 3.11, 3.12, 3.13 |
 | `closed-loop` | full-stack simulations: detect, track and keep separation; operator abort; link-loss failsafe; rejected plans never fly | every push |
 | `sitl` | builds ArduCopter 4.6.3 SITL (cached) and flies a mission through GUIDED mode | every push |
 
@@ -315,7 +330,7 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 
 ## Limitations
 
-- **Simulation, not flight.** No real airframe, no real footage yet. Deployment and field testing are the next
+- **Simulation, not flight.** No real airframe, no results on real footage yet. Deployment and field testing are the next
   phase ([above](#next-deployment-and-field-testing)).
 - **Two observers** share a perfect datalink in simulation; its loss, latency and bandwidth are not modelled. A
   second observer doubles the number of aircraft that can come close to an intruder, and the table shows it.
@@ -325,7 +340,9 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
   network and a five-camera ring are measured above as mitigations, not assumed.
 - **Synthetic sky.** Detection works on rendered pixels, so misses and false alarms are emergent, but the sky,
   optics and targets are simplified. Sunlit targets brighter than the sky and targets below the horizon are out of
-  scope for the detector.
+  scope for the detector. The thermal image is a palette, not a radiometric model: no atmospheric attenuation, no
+  fixed-pattern noise, no thermal crossover at dawn and dusk. `kestrel evaluate` runs the detector on real footage
+  ([docs/real-data.md](docs/real-data.md)); no real-footage results are published yet.
 - **Birds** are medium-sized and fly intermittently; gliding birds are reported as drones, because the cue the
   classifier uses (the wing-beat) is absent.
 - **Acoustic model** has bearing noise, range and latency, but no wind, terrain or urban noise.
@@ -347,7 +364,8 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 ```text
 src/kestrel/
   mission/      schema, rule parser, LLM planner, validator, task geometry, executive
-  perception/   camera + gimbal, sky renderer, detector, tracker, bird/drone classifier, acoustic network
+  perception/   camera + gimbal, sky renderer (visible and thermal, day and night), detector, tracker, bird/drone
+                classifier, acoustic network, evaluation on recorded footage
   guidance/     paths, speed planning, reference filter, standoff observation
   safety/       runtime monitor, energy model
   control/      cascaded position + SE(3) attitude control, mixer
@@ -357,12 +375,14 @@ src/kestrel/
   rap/          the air picture: ground sensor models, fusion node, scoring, tasking loop, replay of SAPIENT logs
   runtime.py    closed-loop simulation      team.py   several observers, one fused picture
   live.py       real-time loop for MAVLink
-  bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | picture | fuse | fly
+  bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | picture | fuse | evaluate | fly
 docs/           concept of operations, architecture, safety case, research and standards map, SAPIENT
                 mapping, decision records, published results, video and its renderer
 scripts/        SITL flight recording; benchmark result collection
-configs/        default, acoustic, acoustic with the jam-resilient link policy, camera ring, birds, everything on
-scenarios/      airfield, airfield with birds, harbour (sea surface), airfield with ground sensors (air picture)
+configs/        default, acoustic, acoustic with the jam-resilient link policy, camera ring, birds, thermal, thermal +
+                acoustic, everything on
+scenarios/      airfield, airfield by night, airfield with birds, harbour (sea surface), airfield with ground sensors
+                (air picture)
 third_party/    Dstl's SAPIENT protobuf schema (Apache-2.0), for the conformance test
 tests/          unit, property, closed-loop and SITL tests
 ```

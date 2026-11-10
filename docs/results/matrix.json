@@ -402,6 +402,240 @@
         "energy_actual_over_estimate_median": 0.5827354260089685,
         "final_distance_from_home_m_max": 2.17
       }
+    },
+    {
+      "key": "night_visible",
+      "label": "night, one camera",
+      "command": "kestrel bench --scenario scenarios/airfield_night.yaml --runs 24 --seed0 4000",
+      "summary": {
+        "seed0": 4000,
+        "avoidance": true,
+        "runs": 24,
+        "completed_and_landed": 24,
+        "returned_early_for_traffic": 0,
+        "landed_safely": 24,
+        "runs_with_contact_tracked": 0,
+        "separation_violations": 18,
+        "lowc_events": 23,
+        "encounters": 24,
+        "encounters_detected": 0,
+        "false_alarms_per_flight_hour": 0.0,
+        "bird_tracks": 0,
+        "birds_reported_as_drone": 0,
+        "drone_tracks": 0,
+        "drone_tracks_reported_as_drone": 0,
+        "min_bird_separation_m": null,
+        "runs_cued": 0,
+        "runs_confirmed": 0,
+        "cue_to_confirm_s": null,
+        "cue_to_track_s": null,
+        "entry_to_track_s": null,
+        "entry_to_confirm_s": null,
+        "confirm_t_s_median": null,
+        "investigations": 0,
+        "team_min_separation_m": null,
+        "track_error_all_m": null,
+        "investigations_confirmed": 0,
+        "reports_buffered": 0,
+        "jammed_s": null,
+        "observed_while_jammed_s": null,
+        "min_separation_m": {
+          "min": 3.58,
+          "median": 10.47
+        },
+        "time_to_first_track_s_median": null,
+        "track_error_median_m": null,
+        "target_in_fov_fraction_median": null,
+        "false_tracks_per_run_median": 0.0,
+        "energy_actual_over_estimate_median": 0.3255605381165919,
+        "final_distance_from_home_m_max": 0.14
+      }
+    },
+    {
+      "key": "night_thermal",
+      "label": "night, thermal camera",
+      "command": "kestrel bench --scenario scenarios/airfield_night.yaml --config configs/thermal.yaml --runs 24 --seed0 4000",
+      "summary": {
+        "seed0": 4000,
+        "avoidance": true,
+        "runs": 24,
+        "completed_and_landed": 23,
+        "returned_early_for_traffic": 1,
+        "landed_safely": 24,
+        "runs_with_contact_tracked": 24,
+        "separation_violations": 3,
+        "lowc_events": 3,
+        "encounters": 24,
+        "encounters_detected": 16,
+        "false_alarms_per_flight_hour": 0.0,
+        "bird_tracks": 0,
+        "birds_reported_as_drone": 0,
+        "drone_tracks": 58,
+        "drone_tracks_reported_as_drone": 58,
+        "min_bird_separation_m": null,
+        "runs_cued": 0,
+        "runs_confirmed": 24,
+        "cue_to_confirm_s": null,
+        "cue_to_track_s": null,
+        "entry_to_track_s": {
+          "median": 30.2,
+          "p90": 45.88
+        },
+        "entry_to_confirm_s": {
+          "median": 30.2,
+          "p90": 45.88
+        },
+        "confirm_t_s_median": 33.35,
+        "investigations": 0,
+        "team_min_separation_m": null,
+        "track_error_all_m": {
+          "median": 4.625,
+          "p90": 8.17
+        },
+        "investigations_confirmed": 0,
+        "reports_buffered": 0,
+        "jammed_s": null,
+        "observed_while_jammed_s": null,
+        "min_separation_m": {
+          "min": 1.42,
+          "median": 14.665
+        },
+        "time_to_first_track_s_median": 32.8,
+        "track_error_median_m": {
+          "median": 4.5215,
+          "p90": 4.9281
+        },
+        "target_in_fov_fraction_median": 1.0,
+        "false_tracks_per_run_median": 1.0,
+        "energy_actual_over_estimate_median": 0.5378923766816144,
+        "final_distance_from_home_m_max": 0.21
+      }
+    },
+    {
+      "key": "night_thermal_acoustic",
+      "label": "night, thermal + acoustic",
+      "command": "kestrel bench --scenario scenarios/airfield_night.yaml --config configs/thermal_acoustic.yaml --runs 24 --seed0 4000",
+      "summary": {
+        "seed0": 4000,
+        "avoidance": true,
+        "runs": 24,
+        "completed_and_landed": 20,
+        "returned_early_for_traffic": 4,
+        "landed_safely": 24,
+        "runs_with_contact_tracked": 24,
+        "separation_violations": 0,
+        "lowc_events": 0,
+        "encounters": 24,
+        "encounters_detected": 20,
+        "false_alarms_per_flight_hour": 0.0,
+        "bird_tracks": 0,
+        "birds_reported_as_drone": 0,
+        "drone_tracks": 81,
+        "drone_tracks_reported_as_drone": 81,
+        "min_bird_separation_m": null,
+        "runs_cued": 24,
+        "runs_confirmed": 24,
+        "cue_to_confirm_s": {
+          "median": 29.6,
+          "p90": 37.6
+        },
+        "cue_to_track_s": {
+          "median": 29.6,
+          "p90": 37.6
+        },
+        "entry_to_track_s": {
+          "median": 23.700000000000003,
+          "p90": 35.105000000000004
+        },
+        "entry_to_confirm_s": {
+          "median": 23.700000000000003,
+          "p90": 35.105000000000004
+        },
+        "confirm_t_s_median": 31.725,
+        "investigations": 0,
+        "team_min_separation_m": null,
+        "track_error_all_m": {
+          "median": 4.47,
+          "p90": 9.120000000000001
+        },
+        "investigations_confirmed": 0,
+        "reports_buffered": 0,
+        "jammed_s": null,
+        "observed_while_jammed_s": null,
+        "min_separation_m": {
+          "min": 12.46,
+          "median": 17.435
+        },
+        "time_to_first_track_s_median": 30.35,
+        "track_error_median_m": {
+          "median": 4.172499999999999,
+          "p90": 4.7104
+        },
+        "target_in_fov_fraction_median": 1.0,
+        "false_tracks_per_run_median": 2.0,
+        "energy_actual_over_estimate_median": 0.7089686098654708,
+        "final_distance_from_home_m_max": 0.19
+      }
+    },
+    {
+      "key": "day_thermal",
+      "label": "thermal camera by day",
+      "command": "kestrel bench --config configs/thermal.yaml --runs 24 --seed0 4000",
+      "summary": {
+        "seed0": 4000,
+        "avoidance": true,
+        "runs": 24,
+        "completed_and_landed": 23,
+        "returned_early_for_traffic": 1,
+        "landed_safely": 24,
+        "runs_with_contact_tracked": 24,
+        "separation_violations": 1,
+        "lowc_events": 2,
+        "encounters": 24,
+        "encounters_detected": 15,
+        "false_alarms_per_flight_hour": 0.0,
+        "bird_tracks": 0,
+        "birds_reported_as_drone": 0,
+        "drone_tracks": 53,
+        "drone_tracks_reported_as_drone": 53,
+        "min_bird_separation_m": null,
+        "runs_cued": 0,
+        "runs_confirmed": 24,
+        "cue_to_confirm_s": null,
+        "cue_to_track_s": null,
+        "entry_to_track_s": {
+          "median": 31.575,
+          "p90": 55.794999999999995
+        },
+        "entry_to_confirm_s": {
+          "median": 31.575,
+          "p90": 55.794999999999995
+        },
+        "confirm_t_s_median": 35.3,
+        "investigations": 0,
+        "team_min_separation_m": null,
+        "track_error_all_m": {
+          "median": 4.47,
+          "p90": 7.915
+        },
+        "investigations_confirmed": 0,
+        "reports_buffered": 0,
+        "jammed_s": null,
+        "observed_while_jammed_s": null,
+        "min_separation_m": {
+          "min": 3.08,
+          "median": 15.0
+        },
+        "time_to_first_track_s_median": 35.1,
+        "track_error_median_m": {
+          "median": 4.371499999999999,
+          "p90": 5.0106
+        },
+        "target_in_fov_fraction_median": 1.0,
+        "false_tracks_per_run_median": 1.0,
+        "energy_actual_over_estimate_median": 0.5338565022421524,
+        "final_distance_from_home_m_max": 0.15
+      }
     }
   ],
   "risk_ratio": 0.056,

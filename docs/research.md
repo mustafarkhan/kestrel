@@ -58,10 +58,12 @@ only for what they say about *sensing*.
    multi-sensor network fusion over SAPIENT, and flights against a cooperating target drone. The fusion
    node already reads recorded SAPIENT traffic (`kestrel fuse`); the NATO counter-UAS data challenge
    data [20] is the first real multi-sensor set to run it on.
-2. Night: thermal imagery and a thermal detector, benchmarked by day and night; the CST Anti-UAV
-   thermal benchmark [17] as the real-data check.
-3. Real-data evaluation of the detector on public air-to-air sets (Det-Fly, Drone-vs-Bird, DUT Anti-UAV
-   [18]) and of the acoustic layer on the 24-microphone localisation set [19].
+2. Night (**done in v0.5**): a thermal camera and a bright-target detector, benchmarked by day and
+   night ([0016](decisions/0016-night-and-thermal.md)). Still open: the CST Anti-UAV thermal benchmark
+   [17] as the real-data check.
+3. Real-data evaluation: the harness is built (`kestrel evaluate`, [real-data.md](real-data.md)); to run
+   on public air-to-air sets (Det-Fly, Drone-vs-Bird, DUT Anti-UAV [18]) and, for the acoustic layer,
+   on the 24-microphone localisation set [19].
 4. Multi-frame, ego-motion-compensated detection, as in AirTrack [2].
 5. Authenticated friendly-force tracking in place of Remote ID for *friend*; the SAPIENT `follow` task.
 6. A tau-based well-clear definition; GNSS-integrity monitoring.
@@ -82,7 +84,7 @@ picture are the gap, not effectors.
 | NATO C-UAS Data Challenge 2026: build one local recognised air picture from radar, RF, EO/IR, acoustic and cyber data from NATO exercises; remove duplicate tracks, fuse kinematics and attributes, classify (drone, bird, type), identify friend, hostile or unknown with white-listed identifiers; registration by 14 December 2026, submission by 21 December 2026, prizes up to €100,000 | NCIA [20] | **Implements** each task in simulation, scored with the same kinds of measure (GOSPA, duplicates, classification, identification). Running it on the challenge data needs registration by an eligible entity |
 | SAPIENT v2.0 (BSI Flex 335 v2.0): hierarchical fusion nodes, mobile nodes, run-time taxonomies; the protobuf schema is published; SAPIENT-compliant radar processing and multi-sensor fusion were validated at NATO's LCI-X Crucible exercise in Romania, April 2026 | GOV.UK [22]; Dstl [23]; Defence Online, August 2026 [26] | **Implements** v2.0 messages, tested against the published schema; tasks use `destination_id` and `look_at.location_list` as the schema defines |
 | EU direct Remote ID is mandatory for specific-category and class-marked drones since 1 January 2024 | EASA [27] | **Uses** it as cooperative identification, never as proof: *friend* needs an independent sensor to put the drone where it says it is, and a cloned serial is never a friend. Remote ID is not authenticated; that limit is stated |
-| Tiny targets are still the hard case: on the CST Anti-UAV thermal benchmark (ICCV 2025 workshop; 220 sequences, 78,224 targets under 10 px, day and night) the best trackers reach about 36% mSA | Xie et al. [17] | **Roadmap** (thermal and real-data evaluation, items 2 and 3) |
+| Tiny targets are still the hard case: on the CST Anti-UAV thermal benchmark (ICCV 2025 workshop; 220 sequences, 78,224 targets under 10 px, day and night) the best trackers reach about 36% mSA | Xie et al. [17] | **Implements** a thermal camera and bright-target detector, measured in simulation by day and night ([0016](decisions/0016-night-and-thermal.md)), and a harness that reads the Anti-UAV layout (`kestrel evaluate`). **Not yet run** on the benchmark itself |
 | Lightweight detectors on public sets: YOLO11n with context-aware augmentation reaches 90.9% mAP50 on Det-Fly (air-to-air), 68.0% on Drone-vs-Bird | arXiv 2604.19999 [18] | **Roadmap**: Kestrel's detector is classical and untested on real footage |
 | A public 24-microphone acoustic localisation set with GPS ground truth (DJI Air 3), released July 2026 | Western Sydney University [19] | **Roadmap**; its terms reserve text-and-data-mining rights, to be checked before use |
 

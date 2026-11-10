@@ -144,10 +144,12 @@ class RunResult:
 
 
 class Perception:
-    def __init__(self, cfg: Config, seed: int, surface: str = "land") -> None:
+    def __init__(self, cfg: Config, seed: int, surface: str = "land", light: str = "day") -> None:
         self.camera = Camera(cfg.camera, cfg.vehicle.camera_offset)
-        self.renderer = SkyRenderer(self.camera, seed=seed, surface=surface)
-        self.detector = SkyTargetDetector(self.camera, cfg.detector)
+        band = cfg.camera.band
+        self.renderer = SkyRenderer(self.camera, seed=seed, surface=surface, band=band, light=light)
+        polarity = "bright" if band == "thermal" else "dark"
+        self.detector = SkyTargetDetector(self.camera, cfg.detector, polarity)
         self.tracker = MultiTargetTracker(cfg.tracker, self.camera)
 
 
@@ -243,7 +245,7 @@ def run(
         return RunResult(plan, report, log, [], Counter(), [], 0, 0.0, True, False, scenario, cfg)
 
     vehicle = SimVehicle(world, cfg.state_noise, seed=scenario.seed)
-    perc = Perception(cfg, scenario.seed, scenario.world.surface)
+    perc = Perception(cfg, scenario.seed, scenario.world.surface, scenario.world.light)
     mission = report.mission if avoidance else report.mission.model_copy(update={"on_contact": "report"})
     executive = Executive(mission, cfg, scenario.world, avoidance=avoidance)
     monitor = SafetyMonitor(cfg.safety, cfg.vehicle, scenario.world, separation=avoidance)

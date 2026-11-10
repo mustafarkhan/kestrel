@@ -1,0 +1,22 @@
+# A thermal camera instead of the colour one: an uncooled long-wave infrared core of the
+# Boson 320 class (320 x 256 pixels, 50 deg horizontal field of view), so the same 0.16 deg
+# per pixel as the default camera over a narrower view. White hot: drones' motors and
+# batteries are warmer than the sky, so the detector looks for bright targets. Everything
+# else as default.yaml.
+vehicle:
+  mass: 1.6
+  battery_wh: 77.0
+camera:
+  band: thermal
+  width: 320
+  height: 256
+  hfov_deg: 50.0
+  pitch_up_deg: 8.0
+  rate_hz: 10.0
+safety:
+  min_altitude: 5.0
+  max_altitude: 60.0
+  max_horizontal_speed: 8.0
+  fence_margin: 8.0
+  min_separation: 12.0
+  energy_reserve_fraction: 0.2

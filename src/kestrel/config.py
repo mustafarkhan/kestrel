@@ -69,6 +69,9 @@ class CameraParams(_Strict):
     gimbal_rate_deg_s: float = 90.0
     gimbal_jitter_deg: float = 0.15  # residual stabilisation error
     rate_hz: float = 10.0
+    # "visible" (a colour camera; targets darker than a bright sky) or "thermal" (an uncooled
+    # long-wave infrared camera; warm motors and batteries brighter than a cold sky)
+    band: Literal["visible", "thermal"] = "visible"
     # Camera layout: yaw of each camera relative to the nose. [0] is one forward camera;
     # [0, 72, 144, -144, -72] is a five-camera ring with full 360 degree coverage at 75 deg hfov.
     yaw_offsets_deg: tuple[float, ...] = (0.0,)
@@ -175,6 +178,7 @@ class WorldConfig(_Strict):
     # for reports to other systems. Default: ArduPilot SITL's default home.
     origin_lla: XYZ = (-35.363261, 149.165230, 584.0)
     surface: Literal["land", "sea"] = "land"  # what lies below the horizon in the camera
+    light: Literal["day", "night"] = "day"  # a night sky gives a visible camera almost no contrast
     sites: dict[str, Site] = Field(default_factory=dict)
     wind: WindParams = WindParams()
 
