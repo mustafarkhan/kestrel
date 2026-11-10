@@ -80,14 +80,16 @@ class SkyTargetDetector:
         above_is_sky = ray[2] > 0
         return self._rows < cols if above_is_sky else self._rows > cols + 2 * self._margin_px
 
-    def detect(self, rgb: np.ndarray, pose: CameraPose) -> list[Detection]:
+    def detect(self, rgb: np.ndarray, pose: CameraPose | None) -> list[Detection]:
+        """Detections in a frame. With no ``pose`` (recorded footage without attitude) the
+        whole frame is searched, so there is no horizon mask to keep ground clutter out."""
         p = self.p
         gray = to_gray(rgb)
         if self.invert:
             gray = 255.0 - gray
         closed = ndimage.grey_closing(gray, size=(p.tophat_size, p.tophat_size))
         resp = closed - gray
-        mask = self.sky_mask(pose)
+        mask = self.sky_mask(pose) if pose is not None else np.ones(gray.shape, dtype=bool)
         # do not trust the top-hat near the image border or the horizon line
         mask = ndimage.binary_erosion(mask, iterations=p.tophat_size // 2, border_value=0)
         self.last_response = np.where(mask, resp, 0.0)

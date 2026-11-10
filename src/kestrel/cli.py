@@ -172,6 +172,22 @@ def cmd_fuse(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    from kestrel.perception.evaluate import READERS, evaluate
+
+    seqs = READERS[args.format](Path(args.path))
+    if not seqs:
+        print(f"no {args.format} sequences found under {args.path}")
+        return 2
+    params = load_config(args.config).detector if args.config else None
+    res = evaluate(seqs, params, args.polarity, every=args.every)
+    summary = res.summary()
+    Path(args.out).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print(json.dumps({k: v for k, v in summary.items() if k != "per_sequence"}, indent=2))
+    print(f"report written to {args.out}")
+    return 0
+
+
 def cmd_fly(args: argparse.Namespace) -> int:
     from kestrel.live import MissionRejected, run_live
     from kestrel.mission.llm import MissionPlanner
@@ -271,6 +287,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--whitelist", help="comma-separated Remote ID serials of friendly drones")
     p.add_argument("--period", type=float, default=1.0, help="seconds between pictures")
     p.set_defaults(func=cmd_fuse)
+
+    p = sub.add_parser("evaluate", help="run the detector on recorded footage with ground-truth boxes")
+    p.add_argument("path", help="dataset folder")
+    p.add_argument("--format", choices=["anti-uav", "yolo", "mot"], default="anti-uav")
+    p.add_argument(
+        "--polarity", choices=["dark", "bright"], default="dark", help="bright: thermal (white hot) footage"
+    )
+    p.add_argument("--every", type=int, default=1, help="use every N-th frame")
+    p.add_argument("--config", help="config YAML whose detector settings to use")
+    p.add_argument("--out", default="evaluation.json")
+    p.set_defaults(func=cmd_evaluate)
 
     p = sub.add_parser("fly", help="fly an ArduPilot vehicle over MAVLink (SITL or real)")
     p.add_argument("instruction")
