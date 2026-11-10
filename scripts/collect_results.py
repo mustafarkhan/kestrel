@@ -56,6 +56,18 @@ ENCOUNTER_SETS = [
         "kestrel bench --intruders 2 --config configs/acoustic.yaml",
     ),
     ("two_team", "two intruders, two observers", "kestrel bench --intruders 2 --observers 2"),
+    ("night_visible", "night, one camera", "kestrel bench --scenario scenarios/airfield_night.yaml"),
+    (
+        "night_thermal",
+        "night, thermal camera",
+        "kestrel bench --scenario scenarios/airfield_night.yaml --config configs/thermal.yaml",
+    ),
+    (
+        "night_thermal_acoustic",
+        "night, thermal + acoustic",
+        "kestrel bench --scenario scenarios/airfield_night.yaml --config configs/thermal_acoustic.yaml",
+    ),
+    ("day_thermal", "thermal camera by day", "kestrel bench --config configs/thermal.yaml"),
 ]
 NODE_SEED0 = 6000
 NODE_SETS = [

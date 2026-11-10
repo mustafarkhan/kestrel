@@ -1,0 +1,22 @@
+# The thermal camera of thermal.yaml plus the ground acoustic cueing network of acoustic.yaml:
+# microphones hear what the narrower thermal view misses. Everything else as default.yaml.
+vehicle:
+  mass: 1.6
+  battery_wh: 77.0
+camera:
+  band: thermal
+  width: 320
+  height: 256
+  hfov_deg: 50.0
+  pitch_up_deg: 8.0
+  rate_hz: 10.0
+safety:
+  min_altitude: 5.0
+  max_altitude: 60.0
+  max_horizontal_speed: 8.0
+  fence_margin: 8.0
+  min_separation: 12.0
+  energy_reserve_fraction: 0.2
+acoustic:
+  enabled: true
+  node_spacing_m: 100.0
