@@ -73,15 +73,16 @@ def test_registration_offers_look_at_tasking() -> None:
     ex = _exporter()
     ex.step(0.0, np.zeros(3), "standby", [], [], acoustic_fitted=False)
     reg = ex.messages[0]["registration"]
-    task_defs = reg["mode_definition"][0]["task"]
-    assert task_defs[0]["command"][0]["type"] == "COMMAND_TYPE_LOOK_AT"
-    assert task_defs[0]["region_definition"]["region_type"] == ["REGION_TYPE_AREA_OF_INTEREST"]
+    task_def = reg["mode_definition"][0]["task"]
+    assert task_def["command"][0]["type"] == "COMMAND_TYPE_LOOK_AT"
+    assert task_def["region_definition"]["region_type"] == ["REGION_TYPE_AREA_OF_INTEREST"]
 
 
 def test_look_at_task_round_trip() -> None:
     ex = _exporter()
     corners = [ex.location(np.array([x, y, 30.0])) for x, y in [(30, 80), (50, 80), (50, 100), (30, 100)]]
-    msg = {"node_id": "c2", "task": {"task_id": "T1", "command": {"look_at": {"locations": corners}}}}
+    look_at = {"location_list": {"locations": corners}}  # LocationOrRangeBearing, BSI Flex 335
+    msg = {"node_id": "c2", "task": {"task_id": "T1", "command": {"look_at": look_at}}}
     look = ex.look_at(msg)
     assert look is not None
     task_id, xy = look

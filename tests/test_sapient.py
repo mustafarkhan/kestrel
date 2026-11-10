@@ -14,11 +14,11 @@ from kestrel.perception.tracker import TrackEstimate
 
 ORIGIN = (-35.363261, 149.165230, 584.0)
 
-# Mandatory (M) fields from the ICD v7 tables: wrapper, Registration (5.1), StatusReport (6.1),
-# DetectionReport (6.2), Location (4.3.1).
+# Mandatory fields (``is_mandatory`` in Dstl's BSI Flex 335 v2.0 protobuf; the ICD v7 tables
+# mark the same ones): wrapper, Registration, StatusReport, DetectionReport, Location.
 WRAPPER = {"timestamp", "node_id"}
-REGISTRATION = {"node_type", "icd_version", "status_definition", "mode_definition"}
-MODE_DEFINITION = {"mode_name", "settle_time", "detection_definition", "task", "mode_type"}
+REGISTRATION = {"node_definition", "icd_version", "status_definition", "mode_definition"}
+MODE_DEFINITION = {"mode_name", "settle_time", "detection_definition", "mode_type"}
 STATUS = {"report_id", "system", "info"}
 DETECTION = {"report_id", "object_id", "location"}
 LOCATION = {"x", "y", "coordinate_system", "datum"}
@@ -84,7 +84,7 @@ def test_messages_carry_mandatory_fields() -> None:
         body = m[kind]
         if kind == "registration":
             assert body.keys() >= REGISTRATION
-            assert body["icd_version"] == "7.0"
+            assert body["icd_version"] == "BSI Flex 335 v2.0"
             assert all(md.keys() >= MODE_DEFINITION for md in body["mode_definition"])
         elif kind == "status_report":
             assert body.keys() >= STATUS

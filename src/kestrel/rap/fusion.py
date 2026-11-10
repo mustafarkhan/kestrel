@@ -172,13 +172,15 @@ class FusionNode:
         self.t = 0.0
         self.camera_node: str | None = None
         self.reports = 0
+        self.node_id = geo.new_node_id()  # the fusion node's own SAPIENT identity, for its tasks
 
     # ------------------------------------------------------------------ input
     def ingest(self, msg: Message) -> None:
         node = str(msg.get("node_id", ""))
         if "registration" in msg:
             reg = msg["registration"]
-            kind = (reg.get("node_type") or ["NODE_TYPE_OTHER"])[0]
+            defs = reg.get("node_definition") or [{"node_type": t} for t in reg.get("node_type") or []]
+            kind = str(defs[0].get("node_type", "NODE_TYPE_OTHER")) if defs else "NODE_TYPE_OTHER"
             self.node_types[node] = kind
             modes = reg.get("mode_definition") or [{}]
             self.node_tracking[node] = (
@@ -218,6 +220,8 @@ class FusionNode:
         for c in det.get("classification") or []:
             if c.get("type") == "UAV":
                 r.p_uav = float(c.get("confidence", 0.5))
+        if det.get("id"):
+            r.remote_id = str(det["id"])
         for info in det.get("track_info") or []:
             if info.get("type") == "remote_id":
                 r.remote_id = str(info.get("value"))
@@ -533,12 +537,12 @@ class FusionNode:
         sigma = np.sqrt(np.clip(np.diag(p)[0:3], 0.0, None))
         return {
             "timestamp": self.geo.timestamp(t),
-            "node_id": "fusion",
+            "node_id": self.node_id,
             "destination_id": self.camera_node or "",
             "task": {
                 "task_id": self.geo.new_ulid(t),
                 "task_name": f"confirm RAP track {tr.ident}",
                 "control": "CONTROL_START",
-                "command": {"look_at": {"locations": [self.geo.location(x[0:3], sigma)]}},
+                "command": {"look_at": {"location_list": {"locations": [self.geo.location(x[0:3], sigma)]}}},
             },
         }

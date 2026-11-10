@@ -323,7 +323,7 @@ def test_example_picture_scenario_loads() -> None:
 
 def _look(g: SapientExporter, task_id: str, sigma: np.ndarray) -> dict[str, object]:
     loc = g.location(np.array([50.0, 80.0, 30.0]), sigma)
-    return {"task": {"task_id": task_id, "command": {"look_at": {"locations": [loc]}}}}
+    return {"task": {"task_id": task_id, "command": {"look_at": {"location_list": {"locations": [loc]}}}}}
 
 
 def test_look_at_with_altitude_lets_the_observer_close_in() -> None:

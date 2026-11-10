@@ -1,6 +1,6 @@
 """Simulated ground sensors, each a SAPIENT node with the blind spots fielded sensors have.
 
-Every sensor writes ICD v7 messages (registration, status, detection reports) in the same
+Every sensor writes BSI Flex 335 v2.0 messages (registration, status, detection reports) in the same
 proto3 JSON layout as Kestrel's own exporter, so the fusion node reads simulated and
 recorded traffic the same way. The models are deliberately simple; what matters for the
 picture is that each one misses what its real counterpart misses:
@@ -74,15 +74,15 @@ class GroundNode:
             "settle_time": _duration(0),
             "scan_type": "SCAN_TYPE_SCANNING" if self.node_type == "NODE_TYPE_RADAR" else "SCAN_TYPE_FIXED",
             "tracking_type": "TRACKING_TYPE_TRACK" if self.tracking else "TRACKING_TYPE_NONE",
-            "detection_definition": {"location_type": loc_type},
+            "detection_definition": [{"location_type": loc_type}],
             "mode_type": "MODE_TYPE_PERMANENT",
         }
         self._emit(
             t,
             "registration",
             {
-                "node_type": [self.node_type],
-                "icd_version": "7.0",
+                "node_definition": [{"node_type": self.node_type}],
+                "icd_version": "BSI Flex 335 v2.0",
                 "name": self.name,
                 "short_name": self.short_name,
                 "status_definition": {"status_interval": _duration(5), "location_definition": loc_type},
@@ -93,7 +93,7 @@ class GroundNode:
     def status(self, t: float, where: Vec | None) -> None:
         content: Message = {"report_id": self.geo.new_ulid(t), "system": "SYSTEM_OK", "mode": "surveil"}
         if where is not None:
-            content["sensor_location"] = self.geo.location(where)
+            content["node_location"] = self.geo.location(where)
         self._emit(t, "status_report", content)
         self.last_status_t = t
 
@@ -107,6 +107,7 @@ class GroundNode:
         vel_sigma: Vec | None = None,
         p_uav: float | None = None,
         info: list[tuple[str, str]] | None = None,
+        object_ident: str | None = None,
     ) -> None:
         content: Message = {
             "report_id": self.geo.new_ulid(t),
@@ -129,6 +130,8 @@ class GroundNode:
             ]
         if info:
             content["track_info"] = [{"type": k, "value": v} for k, v in info]
+        if object_ident is not None:
+            content["id"] = object_ident
         self._emit(t, "detection_report", content)
 
 
@@ -319,8 +322,12 @@ class RemoteIdReceiver:
             pos = claimed + self.rng.normal(0.0, sigma)
             vel = obj.vel + self.rng.normal(0.0, 0.3, 3)
             oid = self.ids.setdefault(obj.key, self.node.geo.new_ulid(t))  # per broadcaster
+            # the serial goes in the report's ``id`` (BSI Flex 335 v2.0: "ID of the object being
+            # reported, e.g. the tail number"), and in track_info for v1.0 consumers
             info = [("remote_id", obj.remote_id)]
-            self.node.detect(t, oid, pos, sigma, vel, np.full(3, 0.5), p_uav=0.99, info=info)
+            self.node.detect(
+                t, oid, pos, sigma, vel, np.full(3, 0.5), p_uav=0.99, info=info, object_ident=obj.remote_id
+            )
 
 
 # --------------------------------------------------------------------------- acoustic
