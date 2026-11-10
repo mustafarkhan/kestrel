@@ -235,8 +235,8 @@ def _pct(v: float | None) -> str:
 def picture_row(label: str, s: dict[str, Any]) -> str:
     """One README air-picture row; tests/test_published_results.py builds the same string."""
     return (
-        f"| {label} | {_pct(s['hostile_coverage'])} | {_pct(s['drone_as_uav'])} | {_pct(s['bird_as_uav'])} "
-        f"| {_pct(s['friend_identified'])} "
+        f"| {label} | {_pct(s['hostile_coverage'])} | {_pct(s['drone_as_uav'])} "
+        f"| {_pct(s['bird_time_as_uav'])} | {_pct(s['friend_identified'])} "
         f"| {s['hostile_as_friend_s']:.0f} s / {s['phantom_friend_s']:.0f} s "
         f"| {s['duplicate_ratio']:.3f} | {s['ids_per_drone']:.2f} | {s['gospa_m']:.1f} m |"
     )

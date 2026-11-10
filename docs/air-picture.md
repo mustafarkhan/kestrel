@@ -108,7 +108,7 @@ throughout.
 * **Duplicates**: extra picture tracks on one object, per object-second.
 * **Track identities per drone**: 1 is unbroken.
 * **Classification**: share of matched drone-seconds shown as UAV, and as bird (the dangerous
-  error); share of matched bird-seconds shown as UAV (the false alarm).
+  error); share of all bird-seconds in the area shown as UAV (the false alarm an operator sees).
 * **Identification**: share of friendly-drone seconds shown as friend; seconds a hostile was
   shown as friend; seconds a friend was shown where no friendly drone is (a phantom).
 * **Track to UAV**: for hostile drones, time from first picture track to first shown as UAV.

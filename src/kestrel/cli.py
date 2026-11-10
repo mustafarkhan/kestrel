@@ -218,7 +218,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", default="runs/latest")
     p.add_argument("--gif", action="store_true", help="also render demo.gif")
     p.add_argument("--seed", type=int)
-    p.add_argument("--sapient", metavar="PATH", help="also write SAPIENT (ICD v7) reports as JSON lines")
+    p.add_argument(
+        "--sapient", metavar="PATH", help="also write SAPIENT (BSI Flex 335 v2.0) messages as JSON lines"
+    )
     p.add_argument(
         "--picture",
         action="store_true",

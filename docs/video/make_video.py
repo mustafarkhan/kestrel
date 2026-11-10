@@ -1049,10 +1049,11 @@ def slide_picture_results(picture: dict[str, Any], loop: dict[str, Any]) -> list
                     continue
                 n = sm.get("runs", 24)
                 cl = sm.get("hostiles_classified", 0)
-                med = sm.get("track_to_uav_median_s")
+                med, p90 = sm.get("track_to_uav_median_s"), sm.get("track_to_uav_p90_s")
                 txt = f"{int(cl)}/{n} classified as drones" + (
-                    "" if med is None else f", median {med:.0f} s after first track"
+                    "" if med is None else f", median {med:.0f} s (p90 {p90:.0f} s) after first track"
                 )
+                txt += f"; {sm.get('runs_with_lowc', 0)}/{n} runs inside 12 m"
                 d.text((70, y), label, fill=INK if key == "untasked" else AQUA, font=sans(20, "Medium"))
                 d.text((420, y), txt, fill=INK, font=sans(20))
                 y += 34

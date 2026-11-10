@@ -13,7 +13,9 @@ definitions:
 * **Duplicates**: extra picture tracks on one object, per object-second.
 * **Track continuity**: picture track identities used per drone (1 is perfect).
 * **Classification**: share of matched drone-seconds labelled UAV, and labelled Bird (the
-  dangerous error); share of matched bird-seconds labelled UAV (the false alarm).
+  dangerous error); share of bird-seconds labelled UAV (the false alarm), of those matched
+  to a picture track and of all bird-seconds inside the area (``bird_time_as_uav``: what an
+  operator sees, since a sensor that never reports birds raises no bird alarms).
 * **Identification**: share of matched friendly-drone seconds shown as FRIEND; seconds a
   hostile drone was shown as friend or assumed friend, and seconds a friend was shown
   where no friendly drone is (a spoofed or phantom friend); both should be zero.
@@ -52,6 +54,7 @@ class PictureScore:
     drone_bird_s: float = 0.0
     drone_matched_s: float = 0.0
     bird_matched_s: float = 0.0
+    bird_s: float = 0.0  # every bird-second inside the area, tracked or not
     bird_uav_s: float = 0.0
     friend_s: float = 0.0
     friend_ok_s: float = 0.0
@@ -107,6 +110,8 @@ class PictureScore:
                 self.drone_s += dt
                 if o.role == "hostile":
                     self.hostile_s += dt
+            else:
+                self.bird_s += dt
             j = assigned.get(i)
             if j is None:
                 continue
@@ -154,6 +159,7 @@ class PictureScore:
             "drone_as_uav": ratio(self.drone_uav_s, self.drone_matched_s),
             "drone_as_bird": ratio(self.drone_bird_s, self.drone_matched_s),
             "bird_as_uav": ratio(self.bird_uav_s, self.bird_matched_s),
+            "bird_time_as_uav": ratio(self.bird_uav_s, self.bird_s),
             "friend_identified": ratio(self.friend_ok_s, self.friend_s),
             "hostile_as_friend_s": round(self.hostile_as_friend_s, 1),
             "phantom_friend_s": round(self.phantom_friend_s, 1),
