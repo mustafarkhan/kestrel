@@ -40,6 +40,7 @@ the test that fails if it comes back.
 | 20 | A long flight grew memory without bound (every message kept) | the live exporter streams and forgets; the fusion node forgets the sensor objects of dropped tracks | by construction (`keep=False`), `test_live.py` |
 | 21 | **One not-a-number coordinate from one sensor corrupted every track in the picture** (protobuf carries NaN and infinity like any double; association spread it), and an infinite one raised out of the fusion node | every report is checked before it touches a track: position, time, errors, velocity and confidence must be finite and plausible; a refused report is counted by reason in the picture | `test_fusion_service.py::test_one_sensor_sending_nonsense_cannot_corrupt_the_picture` |
 | 22 | A sensor flooding new objects could stall the picture (duplicate merging is quadratic in tracks) | a track limit (2,000); object ids and serials are cut to 128 characters | same test |
+| 23 | **A typo in a site or config file weakened the safety monitor in the air**: a fence listed out of order (a bow-tie has no inside), a negative separation, an inverted altitude band and a reserve above 100% were all accepted | fences must be finite, simple polygons with a real area; the origin must be a real position; every safety limit and camera parameter is range-checked when the file is read | `test_config.py` |
 
 ## Open: cannot be closed by software
 
