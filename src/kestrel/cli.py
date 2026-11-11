@@ -29,6 +29,8 @@ DEFAULT_SCENARIO = Path(__file__).resolve().parents[2] / "scenarios" / "airfield
 
 def _load(args: argparse.Namespace) -> tuple[Config, Scenario]:
     cfg = load_config(args.config)
+    if not args.scenario and not DEFAULT_SCENARIO.exists():
+        return cfg, Scenario()  # installed without the repository: the built-in empty site
     scen_path = Path(args.scenario) if args.scenario else DEFAULT_SCENARIO
     if not scen_path.exists():
         sys.exit(f"scenario not found: {scen_path} (pass --scenario)")

@@ -1,0 +1,28 @@
+# A site file: where Kestrel flies and what the fusion node defends.
+# Copy it, survey the numbers, and pass it as --scenario (kestrel fly) and --site (kestrel fusion).
+# Positions are metres east and north of origin_lla; heights are metres above the take-off point.
+name: my_site
+world:
+  # Surveyed origin: latitude, longitude (degrees, WGS84), altitude (m above mean sea level).
+  # kestrel fly places the vehicle on the site from its own GNSS position and refuses to
+  # arm if that is not inside the fence, so a site file for somewhere else cannot be flown.
+  origin_lla: [60.3000, 25.0500, 20.0]
+  # The fence Kestrel never crosses (it also keeps fence_margin inside it). Corners in order.
+  # Set the autopilot's own fence (FENCE_ENABLE) at least as tight: it is the backstop.
+  fence: [[-150, -150], [150, -150], [150, 150], [-150, 150]]
+  surface: land        # land | sea: what lies below the horizon in the camera
+  light: day           # day | night (a visible camera sees nothing at night: use a thermal one)
+  # Named places a mission can refer to ("survey the north field", "orbit the tower").
+  sites:
+    north_field: {kind: rect, min_xy: [-60, 40], max_xy: [60, 120]}
+    tower: {kind: point, xy: [80, -40]}
+    hangar: {kind: point, xy: [-30, 10]}
+# Used by the fusion node only.
+sensors:
+  # Remote ID serials of your own drones. A broadcast alone makes a track "assumed friend";
+  # it is "friend" only while an independent sensor agrees with the broadcast position.
+  whitelist: []
+  # What the picture defends: an unidentified drone inside, or within 60 s of, one of these is
+  # "suspect", and the airborne node is sent to the track that would reach one soonest.
+  protected:
+    hangar: {kind: point, xy: [-30, 10]}
