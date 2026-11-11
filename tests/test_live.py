@@ -262,5 +262,5 @@ def test_the_site_frame_follows_the_vehicle_not_the_other_way_round(cfg: Config,
 
     lost = bench(cfg, scenario)
     lost.global_lla = enu_to_lla(scenario.world.origin_lla, 4000.0, 0.0, 0.0)  # the wrong site file
-    with pytest.raises(ValueError, match="leaves the geofence|not inside the site's fence"):
+    with pytest.raises(ValueError, match=r"leaves the geofence|not inside the site's fence"):
         fly(cfg, scenario, lost, mission, align_site=True)

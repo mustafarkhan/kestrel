@@ -4,6 +4,8 @@ kestrel plan  "<instruction>"            parse + validate, print the plan
 kestrel sim   "<instruction>" [--gif]    closed-loop simulation with report
 kestrel bench --runs 20                  Monte Carlo benchmark
 kestrel fly   "<instruction>" --connect tcp:127.0.0.1:5760   ArduPilot over MAVLink
+kestrel preflight "<instruction>" --connect ...   the pre-flight checks only
+kestrel fusion --site site.yaml --listen 0.0.0.0:5020   the fusion node as a live service
 """
 
 from __future__ import annotations
@@ -15,7 +17,9 @@ import signal
 import ssl
 import sys
 import threading
+import time
 from pathlib import Path
+from typing import Any
 
 from kestrel.config import Config, Scenario, load_config, load_scenario
 from kestrel.mission.llm import ChatBackend, OllamaBackend
@@ -255,27 +259,102 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_fly(args: argparse.Namespace) -> int:
-    from kestrel.live import MissionRejected, run_live
+def _flight_setup(args: argparse.Namespace) -> tuple[Any, ...]:
+    """Everything a flight needs, opened in the order that fails earliest and cheapest."""
     from kestrel.mission.llm import MissionPlanner
-    from kestrel.vehicle.mavlink_vehicle import MavlinkVehicle
 
     cfg, sc = _load(args)
     plan = MissionPlanner(list(sc.world.sites), _backend(args)).plan(args.instruction)
     if plan.mission is None:
-        print("\n".join(plan.notes))
-        return 2
-    vehicle = MavlinkVehicle(args.connect, cfg.vehicle.battery_wh)
-    try:
+        sys.exit("\n".join(plan.notes) or "could not build a plan")
+    frames = None
+    if args.connect == "bench":
+        from kestrel.vehicle.bench_vehicle import BenchVehicle
+
+        vehicle: Any = BenchVehicle(cfg, sc)
+        if args.camera == "bench":
+            frames = vehicle.camera_source()
+        align = False
+    else:
+        from kestrel.vehicle.mavlink_vehicle import MavlinkVehicle
+
+        vehicle = MavlinkVehicle(args.connect, cfg.vehicle.battery_wh)
         vehicle.wait_ready()
-        res = run_live(plan.mission, cfg, sc.world, vehicle)
-    except MissionRejected as exc:
+        align = not args.no_align
+    if args.camera and args.camera != "bench":
+        from kestrel.perception.source import OpenCvSource
+
+        frames = OpenCvSource(args.camera, cfg.camera.width, cfg.camera.height)
+    client = None
+    if args.sapient:
+        from kestrel.interop.wire import SapientClient
+
+        host, port = _endpoint(args.sapient)
+        tls = _tls(args, server=False)
+        if tls is None and host not in ("127.0.0.1", "localhost", "::1") and not args.insecure:
+            sys.exit(
+                "refusing a fusion link beyond this machine without TLS: tasks and traffic would be "
+                "accepted from anyone on the network. Pass --tls-ca/--tls-cert/--tls-key, or --insecure "
+                "on an isolated network."
+            )
+        client = SapientClient(host, port, tls=tls).start()
+    log_dir = Path(args.log_dir or time.strftime("runs/flight-%Y%m%dT%H%M%SZ", time.gmtime()))
+    return cfg, sc, plan.mission, vehicle, frames, client, align, log_dir
+
+
+def _preflight(args: argparse.Namespace, setup: tuple[Any, ...]) -> bool:
+    from kestrel.preflight import cleared, preflight
+
+    cfg, sc, mission, vehicle, frames, client, align, log_dir = setup
+    checks = preflight(mission, cfg, sc.world, vehicle, frames, client, align, log_dir)
+    for c in checks:
+        print(c.line())
+    ok = cleared(checks)
+    print("preflight:", "CLEARED" if ok else "NOT CLEARED: a failed check must be fixed before flight")
+    return ok
+
+
+def _close(setup: tuple[Any, ...]) -> None:
+    _, _, _, vehicle, frames, client, _, _ = setup
+    for thing in (frames, client, vehicle):
+        if thing is not None and hasattr(thing, "close"):
+            thing.close()
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    setup = _flight_setup(args)
+    try:
+        return 0 if _preflight(args, setup) else 1
+    finally:
+        _close(setup)
+
+
+def cmd_fly(args: argparse.Namespace) -> int:
+    from kestrel.live import LiveOptions, MissionRejected, run_live
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    setup = _flight_setup(args)
+    cfg, sc, mission, vehicle, frames, client, align, log_dir = setup
+    try:
+        if not _preflight(args, setup):
+            return 1
+        if not args.yes:
+            print(f"\nmission: {mission.describe()}")
+            if input("type FLY to arm and take off: ").strip() != "FLY":
+                print("not flown")
+                return 1
+        opts = LiveOptions(
+            frames=frames, sapient=client, log_dir=log_dir, align_site=align, stop=_stop_on_signal()
+        )
+        res = run_live(mission, cfg, sc.world, vehicle, options=opts)
+    except (MissionRejected, ValueError) as exc:
         print(exc)
         return 1
     finally:
-        vehicle.close()
+        _close(setup)
     for e in res.events:
         print(f"{e.t:7.1f}s {e.kind}: {e.detail}")
+    print(f"flight log: {log_dir}/")
     return 0 if res.completed else 1
 
 
@@ -390,10 +469,36 @@ def main(argv: list[str] | None = None) -> int:
     tls_args(p)
     p.set_defaults(func=cmd_send)
 
-    p = sub.add_parser("fly", help="fly an ArduPilot vehicle over MAVLink (SITL or real)")
-    p.add_argument("instruction")
-    p.add_argument("--connect", required=True, help="e.g. tcp:127.0.0.1:5760 or udp:0.0.0.0:14550")
-    common(p)
+    def flight_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("instruction")
+        p.add_argument(
+            "--connect",
+            required=True,
+            help="autopilot, e.g. tcp:127.0.0.1:5760, udp:0.0.0.0:14550, /dev/ttyAMA0; or 'bench' "
+            "for the simulated vehicle behind the real loop",
+        )
+        p.add_argument(
+            "--camera",
+            help="camera for OpenCV: device index, GStreamer pipeline, URL or file; 'bench' renders",
+        )
+        p.add_argument("--sapient", help="host:port of the fusion node to report to and take tasks from")
+        p.add_argument("--insecure", action="store_true", help="allow a non-local fusion link without TLS")
+        p.add_argument("--log-dir", help="flight log directory (default runs/flight-<UTC time>)")
+        p.add_argument(
+            "--no-align",
+            action="store_true",
+            help="do not place the vehicle on the site from its GNSS position",
+        )
+        tls_args(p)
+        common(p)
+
+    p = sub.add_parser("preflight", help="run the pre-flight checks for a mission and stop")
+    flight_args(p)
+    p.set_defaults(func=cmd_preflight)
+
+    p = sub.add_parser("fly", help="fly an ArduPilot vehicle over MAVLink (SITL or real), or the bench")
+    flight_args(p)
+    p.add_argument("--yes", action="store_true", help="arm without asking (automation and tests only)")
     p.set_defaults(func=cmd_fly)
 
     args = ap.parse_args(argv)
