@@ -429,6 +429,13 @@ third_party/    Dstl's SAPIENT protobuf schema (Apache-2.0), for the conformance
 tests/          unit, property, closed-loop and SITL tests
 ```
 
+## Contributing
+
+Kestrel is open so that it can be tested, criticised and built on. [CONTRIBUTING.md](CONTRIBUTING.md) says what is
+in scope (and that intercept, engagement and targeting never are) and what a pull request must pass. Results from
+real footage, sensors or flights are the most valuable contribution, whether they confirm the simulation or not.
+Vulnerabilities go through [SECURITY.md](SECURITY.md), not public issues.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE). If you use this work, see [CITATION.cff](CITATION.cff).

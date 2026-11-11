@@ -56,6 +56,14 @@ flowchart LR
 | `perception/classify.py` | bird or drone | wing-beat flicker in the track's brightness, against sensor noise |
 | `perception/acoustic.py` | ground microphone network | bearings triangulated into horizontal fixes; altitude unknown, so a column |
 | `interop/sapient.py` | reports to other systems | SAPIENT (BSI Flex 335 v2.0) registration, status, detection, task acknowledgement; UTM coordinates; checked against Dstl's schema |
+| `interop/wire.py` | SAPIENT on a real link | protobuf from Dstl's schema, mandatory-field validation, length framing, TCP client and server, mutual TLS 1.3; a node id is bound to its connection |
+| `interop/cot.py` | the picture on a TAK display | Cursor on Target events over UDP, identity as the standard affiliation |
+| `rap/service.py` | the fusion node as a live service | the same `FusionNode` behind the SAPIENT server; clock and site checks, sensor health, operator declarations |
+| `rap/tasking.py` | which track gets the next look | shared by the simulation loop and the live service |
+| `live.py` | the real-time flight loop | camera frames, tasks and traffic from the link, link-loss policy, pilot takeover, stale-position and dead-camera handling, flight recorder |
+| `preflight.py` | checks before arming | autopilot, navigation, GNSS, site, battery, mission, camera, link, clock, failsafes, disk; a failed check stops the flight |
+| `perception/source.py` | where frames come from | an OpenCV camera, or the renderer on the bench |
+| `vehicle/bench_vehicle.py` | the simulator behind the real loop | the whole flight software exercised without an aircraft |
 | `rap/sensors.py` | ground radar, RF, Remote ID, acoustic | each a SAPIENT node with its real counterpart's blind spots |
 | `rap/fusion.py` | the recognised air picture | association, Kalman fusion, duplicate merging, bounded class evidence, standard identities, choosing the next look |
 | `rap/loop.py` | the picture in a flight | ground sensors and Kestrel feed it; it tasks Kestrel with `LOOK_AT` |

@@ -1,0 +1,10 @@
+Kestrel
+Copyright 2026 the Kestrel authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes the SAPIENT protobuf schema files published by the UK Defence
+Science and Technology Laboratory (Dstl), Crown copyright, https://github.com/dstl/SAPIENT-Proto-Files,
+licensed under the Apache License, Version 2.0, vendored unchanged under
+third_party/sapient-protos (source commit recorded in SOURCE.md there) and compiled into
+src/kestrel/interop/sapient_v2.desc.
