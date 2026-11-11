@@ -39,7 +39,7 @@ which `kestrel preflight` reports on.
 | the instruction, and the language model's output | the model's output is parsed against a JSON Schema and then validated like any plan: sites must exist, the path must stay in the fence and altitude band, energy must fit. The model never produces setpoints. `stop`, `abort` and `land` bypass it |
 | site and config files | parsed with a safe YAML loader into typed, validated models; a site file for somewhere else cannot be flown, because the vehicle's own GNSS position must fall inside its fence before arming |
 | camera frames | pixels only; a camera that stops delivering is a failed sensor, reported and acted on, not an empty sky |
-| Remote ID broadcasts | **not authenticated, and treated so**: a whitelisted serial is *assumed friend* until an independent sensor agrees with the broadcast position, and a serial heard from two places is never *friend*. A hostile broadcasting our serial from its own true position while ours is on the ground is still shown as friend: see [readiness.md](readiness.md), item E |
+| Remote ID broadcasts | **not authenticated, and treated so**: a whitelisted serial is *assumed friend* until an independent sensor agrees with the broadcast position, and a serial heard from two places is never *friend*. A hostile broadcasting our serial from its own true position while ours is on the ground is still shown as friend: authenticated friendly-force tracking is the fix |
 | the operator console | `declare` is the only way a track becomes *hostile*; every use is recorded in the picture. The console is authenticated only by access to the terminal it runs in |
 
 ## Navigation

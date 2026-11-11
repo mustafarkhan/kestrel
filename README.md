@@ -27,9 +27,8 @@ to an operator), and tasks Kestrel to go and look where the ground sensors canno
 Since v0.6 the same code runs outside the simulator: SAPIENT in its binary wire format over TCP with mutual TLS, the
 fusion node as a live service partners' sensors can connect to, a flight loop that takes camera frames, tasks and
 traffic and stands down the moment a pilot takes over, pre-flight checks, a flight recorder, and output for TAK
-displays. What that closes and what only hardware, flights and an authority can close is listed in
-[docs/readiness.md](docs/readiness.md); the way from bench to first tasked flight is in
-[docs/field-test-plan.md](docs/field-test-plan.md).
+displays. What only hardware, flights and an authority can close is under [Limitations](#limitations); the way
+from bench to first tasked flight is in [docs/field-test-plan.md](docs/field-test-plan.md).
 
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
@@ -64,7 +63,7 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 > **Status (November 2026, v0.6).** Ready for integration testing, not fielded: technology readiness level 4.
 > Everything here runs in simulation, on a bench and on ArduCopter SITL. It has **not flown on a real airframe**,
 > has not been evaluated on real air-to-air footage or real sensor feeds, and nothing is flight-qualified or
-> certified ([readiness.md](docs/readiness.md) lists every open item and who can close it). The camera, bird, aircraft and ground-sensor models are simplified. The known gaps are under [Limitations](#limitations), in
+> certified. The camera, bird, aircraft and ground-sensor models are simplified. The known gaps are under [Limitations](#limitations), in
 > [docs/safety.md](docs/safety.md) and, against published standards, in [docs/research.md](docs/research.md).
 > Kestrel is a sensor: it detects, tracks, keeps clear and reports. It has no intercept, engagement or targeting
 > function, and its reports describe airspace for its protection.
@@ -372,8 +371,8 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 ## Limitations
 
 - **Simulation, bench and SITL, not flight.** No real airframe, no results on real footage, no real sensor connected,
-  no certification of any kind. [docs/readiness.md](docs/readiness.md) is the full register: what v0.6 closed, each
-  with the test that guards it, and what stays open until hardware, flights, data or an authority close it.
+  no certification of any kind, and no assessment against export-control or procurement rules. These stay open
+  until hardware, flights, data or an authority close them ([docs/field-test-plan.md](docs/field-test-plan.md)).
 - **Two observers** share a perfect datalink in simulation; its loss, latency and bandwidth are not modelled. A
   second observer doubles the number of aircraft that can come close to an intruder, and the table shows it.
 - **Jammed-link autonomy** is bounded (2 minutes by default) and covers the ground link only: navigation still
@@ -422,7 +421,7 @@ src/kestrel/
   bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | picture | fuse | fusion | send |
                                                       evaluate | preflight | fly
 deploy/         private CA script, systemd unit        sites/    site file template        Dockerfile
-docs/           concept of operations, architecture, safety case, readiness register, field test plan, research
+docs/           concept of operations, architecture, safety case, field test plan, research
                 and standards map, SAPIENT mapping, decision records, published results, video and its renderer
 scripts/        SITL flight recording; benchmark result collection
 configs/        default, acoustic, acoustic with the jam-resilient link policy, camera ring, birds, thermal, thermal +

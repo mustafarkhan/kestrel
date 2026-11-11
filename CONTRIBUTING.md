@@ -34,7 +34,7 @@ pytest -m "not slow and not sitl"     # about a minute
 5. A design choice with alternatives gets a short decision record in `docs/decisions/`:
    what was found, what was chosen, the numbers before and after.
 6. Say what is not done. A limitation belongs in the README and in
-   [docs/readiness.md](docs/readiness.md), not only in the code.
+   [docs/security.md](docs/security.md) where it is a security matter, not only in the code.
 
 CI runs lint, the unit tests on three Python versions, the closed-loop tests, an
 ArduCopter SITL flight, and a build of the wheel and the container. A pull request is

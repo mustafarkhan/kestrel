@@ -2,7 +2,7 @@
 
 Kestrel has not flown. This is the order in which to change that, with what each stage must
 show before the next one starts. A stage that fails is repeated after the fix; no stage is
-skipped. The open items it closes are lettered as in [readiness.md](readiness.md).
+skipped.
 
 Flying is the operator's responsibility: authorisation for the site and category of
 operation, insurance, a safety pilot with the transmitter in hand on every flight, and a
@@ -32,7 +32,7 @@ kestrel fly "take off to 20 m, survey the north field at 25 m, then return home"
 | the fusion node is stopped mid-mission | Kestrel applies the link-loss action in the config and says so in the log |
 | the real camera in place of `bench` (`--camera 0` or the pipeline) on the ground | preflight reports its size and rate; frames are not black; detections on a clear sky are few |
 
-## Stage 1: camera calibration and recorded footage (closes B in part)
+## Stage 1: camera calibration and recorded footage
 
 On the ground, with the camera that will fly.
 
@@ -48,7 +48,7 @@ On the ground, with the camera that will fly.
 | size-to-range | `size_gain` and `size_offset` refitted on the recording; range error within the monitor's 15% floor at 30 to 60 m |
 | false detections on empty sky, cloud, treeline | counted and published; if high, the horizon mask and thresholds are retuned before flight |
 
-## Stage 2: hardware in the loop (closes part of A)
+## Stage 2: hardware in the loop
 
 The real flight controller on the bench, propellers off, running ArduCopter's simulation
 on the board, connected to the companion computer by the cable that will fly.
@@ -61,7 +61,7 @@ on the board, connected to the companion computer by the cable that will fly.
 | unplug the companion computer in flight (simulated) | the autopilot's own failsafe returns and lands |
 | unplug the camera | Kestrel reports the sensor failed and returns home |
 
-## Stage 3: first flights, no traffic (closes A)
+## Stage 3: first flights, no traffic
 
 Open site, light wind, the safety pilot ready to take over. Low and short first.
 
@@ -81,7 +81,7 @@ Open site, light wind, the safety pilot ready to take over. Low and short first.
 | failsafes | each one triggers once, as configured, with the reason in the log |
 | the simulator's vehicle model | step responses compared with the flight log; the model's mass, drag and rate limits corrected and the benchmarks re-run if they differ |
 
-## Stage 4: perception in flight, target at a distance (closes B)
+## Stage 4: perception in flight, target at a distance
 
 The cooperating target flies a fixed pattern at least 60 m away at a different altitude,
 its position logged (its own GNSS log is the ground truth). Kestrel flies a plain survey
@@ -109,7 +109,7 @@ separation filter is not a collision. The safety pilot aborts on any doubt.
 Only with every Stage 5 encounter passed is the vertical offset reduced, in steps, and
 never below what the operator's risk assessment allows.
 
-## Stage 6: the sensor node with real sensors (closes C, part of D)
+## Stage 6: the sensor node with real sensors
 
 1. A partner's recorded SAPIENT traffic through `kestrel fuse`, then streamed with
    `kestrel send` to a live fusion node: registration, fusion and health without an aircraft.
@@ -140,5 +140,5 @@ software that flew. A result without all of them is not published.
 ## After the trials
 
 The measured numbers replace the simulated ones in the README where they exist, side by
-side with the simulation's, and [readiness.md](readiness.md) is updated: an open item is
-closed only with the log that closed it.
+side with the simulation's. A limitation is removed from the README only with the log that
+removed it.
