@@ -140,6 +140,8 @@ class SapientExporter:
     opts: SapientOptions
     sink: Callable[[Message], None] | None = None
     messages: list[Message] = field(default_factory=list)
+    keep: bool = True  # collect messages in ``messages``; a long flight streams them instead
+    system: str = "SYSTEM_OK"  # reported in the camera node's status (WARNING / ERROR on a fault)
 
     def __post_init__(self) -> None:
         self.link_ok = True
@@ -194,7 +196,8 @@ class SapientExporter:
         self._deliver(msg)
 
     def _deliver(self, msg: Message) -> None:
-        self.messages.append(msg)
+        if self.keep:
+            self.messages.append(msg)
         if self.sink is not None:
             self.sink(msg)
 
@@ -419,7 +422,7 @@ class SapientExporter:
         home_alt: float = 0.0,
     ) -> None:
         if t - self.camera.last_status_t >= self.opts.status_interval_s or mode != self.camera.last_mode:
-            self.status(t, self.camera, observer_enu, mode)
+            self.status(t, self.camera, observer_enu, mode, self.system)
         if acoustic_fitted and t - self.acoustic.last_status_t >= self.opts.status_interval_s:
             self.status(t, self.acoustic, None, "listen")
         period = 1.0 / self.opts.detection_rate_hz
@@ -429,6 +432,15 @@ class SapientExporter:
                 self._last_detection[tr.ident] = t
         for fix in new_fixes:
             self.acoustic_detection(fix, home_alt)
+        if not self.keep and len(self._object_ids) > 4 * len(tracks) + 64:
+            # a long flight: forget tracks that are long gone
+            live = {tr.ident for tr in tracks}
+            self._object_ids = {k: v for k, v in self._object_ids.items() if k in live}
+            self._last_detection = {k: v for k, v in self._last_detection.items() if k in live}
+
+    def goodbye(self, t: float, observer_enu: Vec | None = None) -> None:
+        """Tell the fusion node this node is leaving on purpose (not a failure)."""
+        self.status(t, self.camera, observer_enu, self.camera.last_mode or "observe", "SYSTEM_GOODBYE")
 
     def write_jsonl(self, path: str | Path) -> None:
         with open(path, "w", encoding="utf-8") as fh:
