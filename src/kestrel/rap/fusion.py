@@ -35,6 +35,7 @@ task for the airborne camera node: the cue-to-confirm loop run from the fusion n
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -79,6 +80,7 @@ class FusionOptions:
     own_speed_mps: float = 12.0  # the gate grows by this per second of position age
     traffic_max_z_sigma_m: float = 15.0  # traffic for a mobile node must place the aircraft in 3-D
     traffic_max_h_sigma_m: float = 30.0
+    max_tracks: int = 2000  # new tracks beyond this are refused: a flood cannot stall the picture
 
 
 @dataclass
@@ -136,9 +138,26 @@ class RapTrack:
         return self.x[3:6]
 
 
+MAX_SIGMA_M = 10_000.0  # a stated position error above this (or negative, or not a number) is refused
+MAX_SPEED_MPS = 400.0  # as is a stated speed above this
+MAX_ID_CHARS = 128  # object ids, serials and protocol names are cut to this
+
+
+class BadReport(ValueError):
+    """A report whose content cannot be fused; the message is the reason shown to the operator."""
+
+
+def _sigmas(msg: Message, keys: tuple[str, ...], default: float, limit: float) -> Vec:
+    s = np.array([float(msg.get(k, default)) for k in keys])
+    s[s == 0.0] = default  # zero is how an unset protobuf field reads: unstated, not perfect
+    if not np.all(np.isfinite(s)) or np.any(s < 0.0) or np.any(s > limit):
+        raise BadReport("error not finite, negative or absurd")
+    return s
+
+
 def _sigma_cov(loc: Message, default: float) -> Vec:
-    s = [float(loc.get(k, default)) for k in ("x_error", "y_error", "z_error")]
-    return np.diag(np.maximum(np.array(s), 0.1) ** 2)
+    s = _sigmas(loc, ("x_error", "y_error", "z_error"), default, MAX_SIGMA_M)
+    return np.diag(np.maximum(s, 0.1) ** 2)
 
 
 def site_disc(site: Site, point_radius: float = 40.0) -> tuple[Vec, float]:
@@ -180,6 +199,7 @@ class FusionNode:
         self.t = 0.0
         self.camera_node: str | None = None
         self.reports = 0
+        self.rejected: Counter[str] = Counter()  # reports refused, by reason
         self.node_id = geo.new_node_id()  # the fusion node's own SAPIENT identity, for its tasks
         self.mobile_nodes: set[str] = set()
         self.node_pos: dict[str, tuple[float, Vec]] = {}  # mobile node -> (time, reported position)
@@ -206,12 +226,28 @@ class FusionNode:
         if status is not None:
             loc = status.get("node_location")
             if node in self.mobile_nodes and isinstance(loc, dict):
-                self.node_pos[node] = (self.geo.sim_time(str(msg["timestamp"])), self.geo.to_enu(loc))
+                try:
+                    when, where = self.geo.sim_time(str(msg["timestamp"])), self.geo.to_enu(loc)
+                except (KeyError, ValueError, TypeError, ArithmeticError):
+                    when, where = math.nan, np.full(3, np.nan)
+                if math.isfinite(when) and np.all(np.isfinite(where)):
+                    self.node_pos[node] = (when, where)
+                else:
+                    self.rejected["unreadable node position"] += 1
             return
         det = msg.get("detection_report")
         if det is None or node not in self.node_types:
             return
-        r = self._report(msg, node, det)
+        # Everything a report carries is checked before it touches a track: one not-a-number
+        # coordinate would otherwise spread through association to every track in the picture.
+        try:
+            r = self._report(msg, node, det)
+        except BadReport as e:
+            self.rejected[str(e)] += 1
+            return
+        except (KeyError, ValueError, TypeError, ArithmeticError):
+            self.rejected["unreadable report"] += 1
+            return
         if r is not None:
             self.reports += 1
             self._process(r)
@@ -222,11 +258,13 @@ class FusionNode:
             return None
         t = self.geo.sim_time(str(msg["timestamp"]))
         pos = self.geo.to_enu(loc)
+        if not (math.isfinite(t) and np.all(np.isfinite(pos))):
+            raise BadReport("position or time not finite")
         r = Report(
             t=t,
             node_id=node,
             node_type=self.node_types[node],
-            object_id=str(det.get("object_id", "")),
+            object_id=str(det.get("object_id", ""))[:MAX_ID_CHARS],
             tracking=self.node_tracking.get(node, True),
             pos=pos,
             r_pos=_sigma_cov(loc, 10.0),
@@ -234,18 +272,23 @@ class FusionNode:
         v = det.get("enu_velocity")
         if isinstance(v, dict):
             r.vel = np.array([float(v["east_rate"]), float(v["north_rate"]), float(v.get("up_rate", 0.0))])
-            s = [float(v.get(k, 2.0)) for k in ("east_rate_error", "north_rate_error", "up_rate_error")]
-            r.r_vel = np.diag(np.maximum(np.array(s), 0.1) ** 2)
+            if not np.all(np.isfinite(r.vel)) or float(np.linalg.norm(r.vel)) > MAX_SPEED_MPS:
+                raise BadReport("velocity not finite or absurd")
+            keys = ("east_rate_error", "north_rate_error", "up_rate_error")
+            r.r_vel = np.diag(np.maximum(_sigmas(v, keys, 2.0, MAX_SPEED_MPS), 0.1) ** 2)
         for c in det.get("classification") or []:
             if c.get("type") == "UAV":
-                r.p_uav = float(c.get("confidence", 0.5))
+                conf = float(c.get("confidence", 0.5))
+                if not math.isfinite(conf):
+                    raise BadReport("confidence not finite")
+                r.p_uav = min(max(conf, 0.0), 1.0)
         if det.get("id"):
-            r.remote_id = str(det["id"])
+            r.remote_id = str(det["id"])[:MAX_ID_CHARS]
         for info in det.get("track_info") or []:
             if info.get("type") == "remote_id":
-                r.remote_id = str(info.get("value"))
+                r.remote_id = str(info.get("value"))[:MAX_ID_CHARS]
             elif info.get("type") == "rf_protocol":
-                r.rf_protocol = str(info.get("value"))
+                r.rf_protocol = str(info.get("value"))[:MAX_ID_CHARS]
         return r
 
     # ------------------------------------------------------------------ filter
@@ -288,6 +331,9 @@ class FusionNode:
                     best, best_d = cand, d
             tr = best
         if tr is None:
+            if len(self.tracks) >= self.o.max_tracks:
+                self.rejected["track limit reached"] += 1
+                return
             tr = self._new(r)
         else:
             self._update(tr, r)
@@ -372,6 +418,9 @@ class FusionNode:
     def step(self, t: float) -> None:
         self.t = t
         self.tracks = [tr for tr in self.tracks if t - tr.t <= self.o.coast_s]
+        if len(self._by_source) > 4 * len(self.tracks) + 64:  # forget sensor objects of dropped tracks
+            live = {id(tr) for tr in self.tracks}
+            self._by_source = {k: tr for k, tr in self._by_source.items() if id(tr) in live}
         self._merge(t)
         cloned = self._cloned_serials(t)
         self._mark_own(t)

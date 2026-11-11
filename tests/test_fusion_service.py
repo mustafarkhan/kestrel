@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import math
 import time
 from collections import defaultdict
 from typing import Any
@@ -11,6 +13,7 @@ import pytest
 
 from kestrel.interop import wire
 from kestrel.interop.sapient import SapientExporter, SapientOptions
+from kestrel.rap.fusion import FusionNode, FusionOptions
 from kestrel.rap.picture import PictureRun, flank_scenario, run_picture
 from kestrel.rap.service import FusionService, ServiceOptions, stream_log, summary_line
 
@@ -243,3 +246,65 @@ def test_only_an_operator_makes_a_track_hostile_and_displays_are_told(recorded: 
         rx.close()
     finally:
         svc.server.close()
+
+
+def _fused(recorded: PictureRun, msgs: list[Message], max_tracks: int = 2000) -> FusionNode:
+    sc = recorded.scenario
+    assert sc.sensors is not None
+    geo = SapientExporter(SapientOptions(origin_lla=sc.world.origin_lla, seed=9))
+    node = FusionNode(
+        geo, sc.world, sc.sensors.whitelist, sc.sensors.protected, FusionOptions(max_tracks=max_tracks)
+    )
+    for sec in range(60):
+        for m in msgs:
+            if sec <= geo.sim_time(m["timestamp"]) < sec + 1:
+                node.ingest(m)
+        node.step(sec + 0.999)
+    return node
+
+
+def test_one_sensor_sending_nonsense_cannot_corrupt_the_picture(recorded: PictureRun) -> None:
+    """Protobuf carries not-a-number and infinity like any other double. One such coordinate,
+    fused, spreads through association to every track; so nothing unchecked reaches a track."""
+    geo = recorded.fusion.geo
+    msgs = [m for m in recorded.messages if geo.sim_time(m["timestamp"]) < 60.0]
+    clean = _fused(recorded, msgs)
+    assert len(clean.tracks) >= 4 and not clean.rejected
+
+    nonsense = [
+        (("location", "x"), math.nan),
+        (("location", "y"), math.inf),
+        (("location", "z"), -math.inf),
+        (("location", "x_error"), math.nan),
+        (("location", "y_error"), -4.0),
+        (("location", "z_error"), 1e300),
+        (("location", "x"), "north"),
+        (("location", "coordinate_system"), "LOCATION_COORDINATE_SYSTEM_UNSPECIFIED"),
+        (("classification",), [{"type": "UAV", "confidence": math.nan}]),
+        (("enu_velocity",), {"east_rate": math.nan, "north_rate": 0.0}),
+        (("enu_velocity",), {"east_rate": 9e9, "north_rate": 0.0}),
+        (("enu_velocity",), {"north_rate": 1.0}),
+    ]
+    dirty: list[Message] = []
+    injected = 0
+    for m in msgs:
+        dirty.append(m)
+        if "detection_report" in m:  # every report is followed by a corrupted copy of itself
+            path, value = nonsense[injected % len(nonsense)]
+            det = copy.deepcopy(m["detection_report"])
+            target = det
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            dirty.append({**m, "detection_report": det})
+            injected += 1
+    got = _fused(recorded, dirty)
+    assert sum(got.rejected.values()) == injected, got.rejected
+    assert all(np.all(np.isfinite(tr.x)) and np.all(np.isfinite(tr.p)) for tr in got.tracks)
+    assert len(got.tracks) == len(clean.tracks)
+    for a, b in zip(got.tracks, clean.tracks, strict=True):
+        assert np.allclose(a.x, b.x) and a.identity == b.identity
+
+    # a flood of new objects stops at the limit instead of stalling the picture
+    capped = _fused(recorded, msgs, max_tracks=3)
+    assert len(capped.tracks) <= 3 and capped.rejected["track limit reached"] > 0

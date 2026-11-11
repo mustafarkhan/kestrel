@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0 (2026-11-11)
+
+Ready for integration testing: the code that was measured in simulation now runs outside it.
+[docs/readiness.md](docs/readiness.md) lists each gap closed, with the test that guards it,
+and everything still open.
+
+- SAPIENT on the wire: protobuf encoding from Dstl's schema, mandatory-field validation,
+  length-prefixed framing, TCP client and server with mutual TLS 1.3. Four mandatory-field
+  omissions in earlier messages fixed.
+- `kestrel fusion`: the fusion node as a live service, with sensor health, clock and site
+  checks on every report, operator declarations (the only way a track becomes *hostile*) and
+  Cursor on Target output for TAK displays. `kestrel send` streams a recorded log to it.
+- The ground sensors now see Kestrel itself; the fusion node recognises its own airborne
+  node, never tasks against it and leaves it out of its traffic. Traffic travels as SAPIENT
+  detection reports. Loop benchmark re-flown.
+- The flight loop for real use: camera frames, the fusion link with tasks and traffic, the
+  link-loss policy, pilot takeover, silent autopilot, dead camera, site alignment from GNSS,
+  a flight recorder. A bench vehicle runs the simulator behind the real loop.
+- `kestrel preflight` and an arming gate.
+- Site file template, container, private CA script, service unit; CI builds and uses the
+  wheel and the container; weekly dependency audit.
+- [docs/field-test-plan.md](docs/field-test-plan.md): from bench to first tasked flight.
+
 ## 0.5.0 (2026-11-10)
 
 Night, thermal, and real-data evaluation.

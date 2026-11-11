@@ -24,6 +24,13 @@ duplicates, tells drones from birds, identifies friend, neutral, suspect and unk
 to an operator), and tasks Kestrel to go and look where the ground sensors cannot decide
 ([docs/air-picture.md](docs/air-picture.md)).
 
+Since v0.6 the same code runs outside the simulator: SAPIENT in its binary wire format over TCP with mutual TLS, the
+fusion node as a live service partners' sensors can connect to, a flight loop that takes camera frames, tasks and
+traffic and stands down the moment a pilot takes over, pre-flight checks, a flight recorder, and output for TAK
+displays. What that closes and what only hardware, flights and an authority can close is listed in
+[docs/readiness.md](docs/readiness.md); the way from bench to first tasked flight is in
+[docs/field-test-plan.md](docs/field-test-plan.md).
+
 ![Kestrel detecting, tracking and shadowing an intruder drone](docs/figures/demo.gif)
 
 🎬 **[Project video (7 min 15 s)](docs/video/kestrel_demo.mp4)**: why small drones matter now, the instruction, the checked plan, a
@@ -45,25 +52,28 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 | **Hear what the camera cannot see** | ground microphone grid, 2° bearings, triangulated fixes that point the camera and widen the keep-out | see the results matrix |
 | **Track** | bearing + log-range EKF per track, global-nearest-neighbour association, M-of-N confirmation | 4.6 m median position error while shadowing at ~30 m |
 | **Keep clear** | give way to crossing traffic, standoff guidance, escape velocity; separation buffer from uncertainty, reachable set and stopping distance | risk ratio against no avoidance, below |
-| **Report and take tasking** | SAPIENT BSI Flex 335 v2.0 registration, status and detection reports, UTM coordinates; accepts and acknowledges `LOOK_AT` tasks ([interop.md](docs/interop.md)) | every message kind parsed against Dstl's published protobuf schema in CI; no run against a third-party fusion node yet |
+| **Report and take tasking** | SAPIENT BSI Flex 335 v2.0 registration, status and detection reports, UTM coordinates; accepts and acknowledges `LOOK_AT` tasks ([interop.md](docs/interop.md)) | encoded as protobuf from Dstl's schema and checked for the standard's mandatory fields in CI; framed TCP with mutual TLS 1.3; no run against a third-party fusion node yet |
 | **Build the air picture** | radar, RF, Remote ID and acoustic nodes over SAPIENT; association, Kalman fusion with each report's errors, duplicate merging, bounded class evidence ([air-picture.md](docs/air-picture.md)) | each sensor alone against all fused on the same 24 situations: see the air-picture table |
 | **Identify** | APP-6 identities: *friend* only for a whitelisted Remote ID serial corroborated by an independent sensor; a cloned serial is never a friend; *hostile* only by an operator | spoofed and cloned serials in the benchmark: see the air-picture table |
 | **Investigate reports** | stand by on station; go and look when a ground sensor, an operator or the C2 node reports something; confirm, classify, follow | report to track: see the sensor-node table |
 | **Work through jamming** | bounded on-board autonomy when the ground link is lost; reports held and sent with their original times | intruder held while jammed: see the sensor-node table |
 | **Fly as a team** | two observers, one fused tracker, shared contacts, each other as cooperative traffic | intruder position error with two observers against one: see the sensor-node table |
-| **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink) | full mission flown on **ArduCopter 4.6.3 SITL in CI** |
+| **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink); pre-flight checks, typed arming confirmation, pilot takeover, flight recorder | full mission flown on **ArduCopter 4.6.3 SITL in CI**; the flight loop tested on a bench vehicle with camera, fusion link and faults |
+| **Run as a service** | `kestrel fusion`: the benchmarked fusion node behind a SAPIENT TCP server with mutual TLS; sensor health; operator declarations; Cursor on Target for ATAK/WinTAK; container and service unit | real sockets in the tests, compared against the direct result; hostile peers, bad clocks and off-site reports rejected |
 
-> **Status (November 2026, v0.5).** Everything here runs in simulation and on ArduCopter SITL. It has **not flown on
-> a real airframe**, has not been evaluated on real air-to-air footage or real sensor feeds, and nothing is
-> flight-qualified. The camera, bird, aircraft and ground-sensor models are simplified. The known gaps are under [Limitations](#limitations), in
+> **Status (November 2026, v0.6).** Ready for integration testing, not fielded: technology readiness level 4.
+> Everything here runs in simulation, on a bench and on ArduCopter SITL. It has **not flown on a real airframe**,
+> has not been evaluated on real air-to-air footage or real sensor feeds, and nothing is flight-qualified or
+> certified ([readiness.md](docs/readiness.md) lists every open item and who can close it). The camera, bird, aircraft and ground-sensor models are simplified. The known gaps are under [Limitations](#limitations), in
 > [docs/safety.md](docs/safety.md) and, against published standards, in [docs/research.md](docs/research.md).
 > Kestrel is a sensor: it detects, tracks, keeps clear and reports. It has no intercept, engagement or targeting
 > function, and its reports describe airspace for its protection.
 
 ## Next: deployment and field testing
 
-Simulation was the first gate. The next phase is deploying and testing Kestrel with our own systems and our
-defence-technology partners:
+Simulation was the first gate, and v0.6 made the software ready to leave it. The next phase is deploying and
+testing Kestrel with our own systems and our defence-technology partners, in the order of
+[docs/field-test-plan.md](docs/field-test-plan.md):
 
 - **Real sensor data.** The detector, tracker and bird/drone classifier evaluated on real air-to-air footage and
   real acoustic cues, and the fusion node run on recorded multi-sensor SAPIENT traffic (`kestrel fuse`), so the
@@ -135,6 +145,31 @@ Against ArduCopter SITL (or a real ArduPilot vehicle):
 kestrel fly "take off to 15 m, fly to the tower, orbit the tower with a radius of 15 m, then return home" \
   --connect tcp:127.0.0.1:5760
 ```
+
+Outside the simulator (`pip install "kestrel[live]"` adds OpenCV for the camera):
+
+```bash
+deploy/pki.sh pki fusion kestrel-1 radar-1           # a private CA for the site, one certificate per device
+
+# the fusion node as a service: SAPIENT nodes connect over mutual TLS; the picture goes to a file and to ATAK
+kestrel fusion --site sites/template.yaml --listen 0.0.0.0:5020 --out runs/rap.jsonl --cot 239.2.3.1:6969 \
+  --tls-ca pki/ca.crt --tls-cert pki/fusion.crt --tls-key pki/fusion.key
+
+# a recorded SAPIENT log streamed to it as if the sensors were there
+kestrel send runs/sapient.jsonl --connect 127.0.0.1:5020 \
+  --tls-ca pki/ca.crt --tls-cert pki/radar-1.crt --tls-key pki/radar-1.key
+
+# the whole flight loop on a bench, no aircraft: simulated vehicle and camera behind the real loop
+kestrel preflight "take off to 20 m, survey the north field at 25 m, then return home" \
+  --connect bench --camera bench --scenario sites/template.yaml
+kestrel fly "take off to 20 m, survey the north field at 25 m, then return home" \
+  --connect bench --camera bench --scenario sites/template.yaml --sapient 127.0.0.1:5020 \
+  --tls-ca pki/ca.crt --tls-cert pki/kestrel-1.crt --tls-key pki/kestrel-1.key
+```
+
+On an aircraft the same two commands take `--connect /dev/ttyAMA0` (or the telemetry address) and `--camera 0`
+(or a GStreamer pipeline); arming needs the operator to type `FLY`. A track becomes *hostile* only when the
+operator types `declare <track> HOSTILE` on the fusion console.
 
 What the planner hands the rest of the stack:
 
@@ -318,9 +353,11 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | job | what | runs |
 |---|---|---|
 | `lint` | ruff, ruff format, mypy `--strict` | every push |
-| `unit` | 138 tests incl. property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, night and thermal detection, the real-data evaluation harness in three layouts, SAPIENT messages parsed against the published v2.0 schema, UTM against PROJ, sensor blind spots, fusion consistency, friend/spoof/clone identification, LLM planner against a local HTTP server, README tables against the committed results | Python 3.11, 3.12, 3.13 |
+| `unit` | 157 tests incl. the SAPIENT wire format (framing fuzzed, mandatory fields, mutual TLS), the fusion service over real sockets, the flight loop on a bench vehicle with faults injected (pilot takeover, silent autopilot, dead camera), pre-flight checks from the command line, property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, night and thermal detection, the real-data evaluation harness in three layouts, SAPIENT messages parsed against the published v2.0 schema, UTM against PROJ, sensor blind spots, fusion consistency, friend/spoof/clone identification, LLM planner against a local HTTP server, README tables against the committed results | Python 3.11, 3.12, 3.13 |
 | `closed-loop` | full-stack simulations: detect, track and keep separation; operator abort; link-loss failsafe; rejected plans never fly | every push |
 | `sitl` | builds ArduCopter 4.6.3 SITL (cached) and flies a mission through GUIDED mode | every push |
+| `package` | builds the wheel, installs it in a clean environment and uses it; builds and runs the container | every push |
+| `audit` | dependency vulnerability audit | weekly |
 
 ```bash
 pytest -m "not slow and not sitl"   # about a minute
@@ -330,8 +367,9 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 
 ## Limitations
 
-- **Simulation, not flight.** No real airframe, no results on real footage yet. Deployment and field testing are the next
-  phase ([above](#next-deployment-and-field-testing)).
+- **Simulation, bench and SITL, not flight.** No real airframe, no results on real footage, no real sensor connected,
+  no certification of any kind. [docs/readiness.md](docs/readiness.md) is the full register: what v0.6 closed, each
+  with the test that guards it, and what stays open until hardware, flights, data or an authority close it.
 - **Two observers** share a perfect datalink in simulation; its loss, latency and bandwidth are not modelled. A
   second observer doubles the number of aircraft that can come close to an intruder, and the table shows it.
 - **Jammed-link autonomy** is bounded (2 minutes by default) and covers the ground link only: navigation still
@@ -348,9 +386,11 @@ ARDUPILOT_SITL=.../arducopter ARDUPILOT_DEFAULTS=.../copter.parm pytest -m sitl
 - **Acoustic model** has bearing noise, range and latency, but no wind, terrain or urban noise.
 - **Monocular range** rests on an assumed target size (0.35 m). The safety monitor's 15% range-uncertainty floor
   covers modest errors, not a wrong aircraft class.
-- **SAPIENT** messages are written as JSON that parses against Dstl's published BSI Flex 335 v2.0 protobuf schema;
-  the TCP framing and a run against a third-party fusion node or the SAPIENT test harness are not done
-  ([interop.md](docs/interop.md)).
+- **SAPIENT** is encoded and framed as the standard specifies and checked against Dstl's published schema, but has
+  not been run against the SAPIENT test harness or a third-party fusion node; `follow`, `move_to` and `patrol`
+  tasks are not accepted ([interop.md](docs/interop.md)).
+- **Links.** The SAPIENT link is mutually authenticated and encrypted; the MAVLink link to the autopilot is not
+  signed by Kestrel (configure MAVLink 2 signing on the autopilot and radios), and navigation relies on GNSS.
 - **Ground sensors** in the air picture are simple models with typical published parameters, not particular
   products: radar is the radar equation with clutter masking by a range-and-height rule, micro-Doppler is a noisy
   score, not a spectrum ([air-picture.md](docs/air-picture.md#limits)).
@@ -370,14 +410,16 @@ src/kestrel/
   safety/       runtime monitor, energy model
   control/      cascaded position + SE(3) attitude control, mixer
   sim/          rigid-body quadrotor, wind, intruders, birds, world
-  vehicle/      Vehicle protocol, simulated vehicle, ArduPilot over MAVLink
-  interop/      SAPIENT messages and tasking, UTM conversion
-  rap/          the air picture: ground sensor models, fusion node, scoring, tasking loop, replay of SAPIENT logs
+  vehicle/      Vehicle protocol, simulated vehicle, ArduPilot over MAVLink, bench vehicle behind the real loop
+  interop/      SAPIENT messages and tasking, protobuf wire format and TLS transport, Cursor on Target, UTM
+  rap/          the air picture: ground sensor models, fusion node and live service, scoring, tasking, replay
   runtime.py    closed-loop simulation      team.py   several observers, one fused picture
-  live.py       real-time loop for MAVLink
-  bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | picture | fuse | evaluate | fly
-docs/           concept of operations, architecture, safety case, research and standards map, SAPIENT
-                mapping, decision records, published results, video and its renderer
+  live.py       real-time flight loop       preflight.py   checks before arming
+  bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | picture | fuse | fusion | send |
+                                                      evaluate | preflight | fly
+deploy/         private CA script, systemd unit        sites/    site file template        Dockerfile
+docs/           concept of operations, architecture, safety case, readiness register, field test plan, research
+                and standards map, SAPIENT mapping, decision records, published results, video and its renderer
 scripts/        SITL flight recording; benchmark result collection
 configs/        default, acoustic, acoustic with the jam-resilient link policy, camera ring, birds, thermal, thermal +
                 acoustic, everything on

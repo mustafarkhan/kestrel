@@ -203,7 +203,9 @@ class FusionService:
                 }
                 for node, h in sorted(self.health.items())
             ]
-            picture["rejected"] = dict(self.rejected) | {"by the link": self.server.rejected}
+            picture["rejected"] = (
+                dict(self.rejected) | dict(self.fusion.rejected) | {"by the link": self.server.rejected}
+            )
             picture["tasks"] = {"sent": self.tasker.tasks_sent, "acks": dict(self.task_acks)}
             picture["declared_by_operator"] = list(self.declarations)
         for m in outgoing:

@@ -53,6 +53,17 @@ task command definition.
 Kestrel registers two nodes, its cameras and (if fitted) the ground acoustic network,
 so a fusion node weighs each on its own record.
 
+## On the wire
+
+`src/kestrel/interop/wire.py` turns the JSON-layout messages into what a SAPIENT link
+carries: protobuf binary built from Dstl's schema, each message preceded by its length as a
+4-byte little-endian integer, over TCP. A validator reads the schema's `is_mandatory` options,
+which protobuf itself does not enforce; everything Kestrel sends is checked against them in
+the tests and everything the fusion service receives is checked on arrival. The standard
+defines no transport security, so both endpoints run mutual TLS 1.3 against a private site
+CA ([security.md](security.md)). `kestrel fusion` is the fusion-node end, `kestrel fly
+--sapient` and `kestrel send` the node end.
+
 ## Tasking
 
 A task that asks Kestrel to look at a list of locations sends the observer to investigate
@@ -90,8 +101,7 @@ link is down.
 * **Taxonomy.** Class names (`UAV`, `Bird`) are placeholders. v2.0 defines taxonomies at run
   time; aligning with an agreed one is open.
 * **Conformance beyond the schema.** No run against the SAPIENT test harness, the Apex
-  middleware, or a third-party fusion node; the TCP framing (4-byte little-endian length
-  prefix) is not implemented.
+  middleware, or a third-party fusion node.
 * **Hierarchy.** v2.0's hierarchical fusion (`NODE_TYPE_FUSION_NODE`, `dependent_nodes`) is
   not used; Kestrel's fusion node is a single level.
 

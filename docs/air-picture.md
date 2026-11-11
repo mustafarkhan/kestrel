@@ -158,10 +158,12 @@ What the numbers say, and what the errors left are:
   shown as friend. The clone rule only helps while ours is also up. A fielded system needs
   authenticated friendly-force tracking from its own ground control, not a broadcast anyone
   can copy.
-* The picture's traffic reaches Kestrel's separation filter directly in simulation, after the
-  same link check as tasking. On the wire it would be the fusion node's own detection reports
-  addressed to Kestrel; that encoding is not written yet.
-* Kestrel itself is not in the ground sensors' truth, so the radar never tracks it. A fielded
-  fusion node must recognise its own airborne node (from its status reports) and keep it out of
-  the traffic it sends back.
-* No real sensor data yet. `kestrel fuse` is the entry point for it.
+* Since v0.6 the ground sensors see Kestrel like any other drone. The fusion node recognises
+  the track nearest the position its mobile node reports about itself (within 10 m, growing
+  with the age of that report), shows it as friend, never tasks against it, and leaves it out
+  of the traffic it sends that node. Two friendly aircraft within that gate of each other can
+  be confused for one another.
+* Traffic travels as the fusion node's own SAPIENT detection reports addressed to Kestrel, in
+  simulation and live.
+* No real sensor data yet. `kestrel fuse` (offline) and `kestrel send` (to a live
+  `kestrel fusion`) are the entry points for it.
