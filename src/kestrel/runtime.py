@@ -367,10 +367,17 @@ def run(
             loc = parse_investigate(text, rules)
             if loc is not None:
                 executive.request_investigate(resolve_xy(loc, scenario.world), t, "operator")
-        if air_picture is not None:
-            c2_tasks += [(t, task) for task in air_picture.tick(t, birds)]
-            if link_ok:  # the picture's traffic reaches Kestrel over the same link
-                traffic = list(air_picture.traffic)
+        if air_picture is not None and sapient is not None:
+            s_true = world.quad.state
+            from_fusion = air_picture.tick(t, birds, (s_true.pos, s_true.vel))
+            c2_tasks += [(t, m) for m in from_fusion if "task" in m]
+            reports = [m for m in from_fusion if "detection_report" in m]
+            if link_ok and reports:  # the picture's traffic reaches Kestrel over the same link
+                traffic = [
+                    est
+                    for k, m in enumerate(reports)
+                    if (est := sapient.traffic_estimate(m, -1000 - k)) is not None
+                ]
             traffic = [tr for tr in traffic if t - tr.last_hit_t < TRAFFIC_MAX_AGE_S]
         while link_ok and c2_tasks and c2_tasks[0][0] <= t:
             _, msg = c2_tasks.pop(0)

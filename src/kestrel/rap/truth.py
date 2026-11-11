@@ -43,8 +43,18 @@ class Truth:
             flock = Flock(scenario.birds, scenario.world, float(scenario.world.home[2]), scenario.seed)
         self.flock = flock
 
-    def objects(self, t: float, birds: list[BirdState] | None = None) -> list[TruthObject]:
+    def objects(
+        self, t: float, birds: list[BirdState] | None = None, own: tuple[Vec, Vec] | None = None
+    ) -> list[TruthObject]:
+        """Everything in the air at ``t``. ``own`` is our airborne node's position and velocity:
+        ground sensors see it like any other small multirotor with a radio link."""
         out = [o for it in self.intruders if (o := self._drone(it, t)) is not None]
+        if own is not None and own[0][2] > 1.0:
+            out.append(
+                TruthObject(
+                    "own-0", "uav", "own", own[0], own[1], 0.02, 0.7, True, "c2-link", None, None, "electric"
+                )
+            )
         if birds is None:
             birds = self.flock.states(t) if self.flock is not None else []
         bc = self.scenario.birds

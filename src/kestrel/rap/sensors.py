@@ -33,7 +33,7 @@ from kestrel.config import (
     WorldConfig,
 )
 from kestrel.geometry import Vec
-from kestrel.interop.sapient import SapientExporter
+from kestrel.interop.sapient import SapientExporter, capability, config_data, region_task
 from kestrel.perception.acoustic import triangulate
 from kestrel.rap.truth import TruthObject
 
@@ -76,6 +76,7 @@ class GroundNode:
             "tracking_type": "TRACKING_TYPE_TRACK" if self.tracking else "TRACKING_TYPE_NONE",
             "detection_definition": [{"location_type": loc_type}],
             "mode_type": "MODE_TYPE_PERMANENT",
+            "task": region_task(loc_type),
         }
         self._emit(
             t,
@@ -85,13 +86,20 @@ class GroundNode:
                 "icd_version": "BSI Flex 335 v2.0",
                 "name": self.name,
                 "short_name": self.short_name,
+                "capabilities": [capability("Simulation", f"Simulated {self.name}")],
+                "config_data": config_data(self.short_name, "Kestrel simulation"),
                 "status_definition": {"status_interval": _duration(5), "location_definition": loc_type},
                 "mode_definition": [mode],
             },
         )
 
     def status(self, t: float, where: Vec | None) -> None:
-        content: Message = {"report_id": self.geo.new_ulid(t), "system": "SYSTEM_OK", "mode": "surveil"}
+        content: Message = {
+            "report_id": self.geo.new_ulid(t),
+            "system": "SYSTEM_OK",
+            "info": "INFO_UNCHANGED" if self.last_status_t > -math.inf else "INFO_NEW",
+            "mode": "surveil",
+        }
         if where is not None:
             content["node_location"] = self.geo.location(where)
         self._emit(t, "status_report", content)

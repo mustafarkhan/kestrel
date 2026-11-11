@@ -43,6 +43,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +74,40 @@ def _duration(seconds: int) -> Message:
     return {"units": "TIME_UNITS_SECONDS", "value": seconds}
 
 
+def software_version() -> str:
+    try:
+        return version("kestrel-uas")
+    except PackageNotFoundError:  # running from a source tree that is not installed
+        return "0+source"
+
+
+def config_data(model: str, manufacturer: str = "Kestrel (open source)") -> list[Message]:
+    """The mandatory ``config_data`` of a registration: who made the node and what runs on it."""
+    return [{"manufacturer": manufacturer, "model": model, "software_version": software_version()}]
+
+
+def capability(category: str, kind: str, value: str = "", units: str = "") -> Message:
+    out: Message = {"category": category, "type": kind}
+    if value:
+        out["value"] = value
+    if units:
+        out["units"] = units
+    return out
+
+
+def region_task(location_type: Message, commands: list[Message] | None = None) -> Message:
+    """The mandatory ``task`` of a mode definition: the regions (and commands) a node accepts."""
+    out: Message = {
+        "region_definition": {
+            "region_type": ["REGION_TYPE_AREA_OF_INTEREST"],
+            "region_area": [location_type],
+        }
+    }
+    if commands:
+        out["command"] = commands
+    return out
+
+
 @dataclass
 class SapientOptions:
     origin_lla: tuple[float, float, float]  # geodetic position of the local ENU origin
@@ -80,6 +115,7 @@ class SapientOptions:
     status_interval_s: int = 1
     detection_rate_hz: float = 2.0  # per object; the ICD leaves rate to the deployment
     altitude_band_m: tuple[float, float] = (0.0, 60.0)  # AGL band an acoustic fix may lie in
+    camera_band: str = "visible"  # declared in the camera node's registration
     uav_class: str = "UAV"
     bird_class: str = "Bird"
     seed: int = 0
@@ -195,19 +231,10 @@ class SapientExporter:
 
     def _look_at_definition(self) -> Message:
         """The camera node accepts LOOK_AT tasks over an area of interest (ICD 5.6, 5.6.8-9)."""
-        return {
-            "region_definition": {
-                "region_type": ["REGION_TYPE_AREA_OF_INTEREST"],
-                "region_area": [self._location_type()],
-            },
-            "command": [
-                {
-                    "units": "locationList",
-                    "completion_time": _duration(60),
-                    "type": "COMMAND_TYPE_LOOK_AT",
-                }
-            ],
-        }
+        return region_task(
+            self._location_type(),
+            [{"units": "locationList", "completion_time": _duration(60), "type": "COMMAND_TYPE_LOOK_AT"}],
+        )
 
     def to_enu(self, loc: Message) -> Vec:
         """A SAPIENT ``Location`` (UTM_M in our zone, or LAT_LNG_DEG_M) in the local ENU frame."""
@@ -251,6 +278,29 @@ class SapientExporter:
         z_known = all(float(loc.get("z_error", math.inf)) < 15.0 for loc in locs)
         return str(task.get("task_id", "")), pts.mean(axis=0), z_known
 
+    def traffic_estimate(self, msg: Message, ident: int) -> TrackEstimate | None:
+        """A fusion node's detection report as a contact for the separation filter.
+
+        Returns ``None`` unless the report places the aircraft in three dimensions. The
+        contact's time is when the track was last *measured* (``measured_at``), not when the
+        report was sent, so the filter's reachable-set term covers the age honestly.
+        """
+        det = msg.get("detection_report")
+        loc = det.get("location") if isinstance(det, dict) else None
+        if not isinstance(det, dict) or not isinstance(loc, dict):
+            return None
+        sig = [float(loc.get(k, math.inf)) for k in ("x_error", "y_error", "z_error")]
+        if not all(math.isfinite(v) for v in sig):
+            return None
+        info = {str(i.get("type")): str(i.get("value")) for i in det.get("track_info") or []}
+        sent = self.sim_time(str(msg["timestamp"]))
+        measured = min(self.sim_time(info.get("measured_at", str(msg["timestamp"]))), sent)
+        v = det.get("enu_velocity") or {}
+        vel = np.array([float(v.get(k, 0.0)) for k in ("east_rate", "north_rate", "up_rate")])
+        vsig = [float(v.get(k, 5.0)) for k in ("east_rate_error", "north_rate_error", "up_rate_error")]
+        cov = np.diag(np.array(sig + vsig) ** 2)
+        return TrackEstimate(ident, self.to_enu(loc), vel, cov, True, 0, measured)
+
     def task_ack(self, t: float, task_id: str, accepted: bool, reason: str = "") -> None:
         content: Message = {
             "task_id": task_id,
@@ -271,13 +321,26 @@ class SapientExporter:
             "detection_definition": [{"location_type": self._location_type()}],
             "mode_type": "MODE_TYPE_PERMANENT",
         }
+        # a mode definition must declare its task; a node that takes no commands declares none
+        mode["task"] = (
+            self._look_at_definition() if node is self.camera else region_task(self._location_type())
+        )
         if node is self.camera:
-            mode["task"] = self._look_at_definition()
+            caps = [
+                capability("Camera", "Band", self.opts.camera_band),
+                capability("Camera", "Detection report rate", f"{self.opts.detection_rate_hz:g}", "Hz"),
+                capability("Platform", "Mobile airborne node (multirotor)"),
+            ]
+        else:
+            caps = [capability("Acoustic", "Bearing-only nodes, triangulated fixes without altitude")]
         content = {
-            "node_definition": [{"node_type": node.node_type}],
+            "node_definition": [{"node_type": node.node_type}]
+            + ([{"node_type": "NODE_TYPE_MOBILE_NODE"}] if node is self.camera else []),
             "icd_version": ICD_VERSION,
             "name": node.name,
             "short_name": node.short_name,
+            "capabilities": caps,
+            "config_data": config_data(node.short_name),
             "status_definition": {
                 "status_interval": _duration(self.opts.status_interval_s),
                 "location_definition": self._location_type(),

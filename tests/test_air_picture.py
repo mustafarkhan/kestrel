@@ -19,6 +19,7 @@ from kestrel.config import (
     WorldConfig,
     load_scenario,
 )
+from kestrel.interop import wire
 from kestrel.interop.sapient import SapientExporter, SapientOptions
 from kestrel.mission.executive import Executive, InvestigateB
 from kestrel.mission.parser import RuleParser
@@ -363,12 +364,46 @@ def _picture_for(include: set[str] | None) -> object:
 def test_the_picture_shares_its_3d_tracks_with_kestrel_as_traffic() -> None:
     """Kestrel's camera sees only ahead; the radar's tracks keep it clear of the rest."""
     ap = _picture_for({"radar"})
-    traffic = ap.traffic  # type: ignore[attr-defined]
+    fusion = ap.fusion  # type: ignore[attr-defined]
+    traffic = fusion.traffic(40.0)
     assert traffic, "the radar holds the drones over the airfield"
-    for tr in traffic:
-        assert tr.ident <= -1000  # never collides with Kestrel's own track or cue ids
-        assert tr.cov[2, 2] < 15.0**2
+    assert all(tr.p[2, 2] < 15.0**2 for tr in traffic)
+    # as SAPIENT detection reports they are conformant and decode back to the same contacts
+    geo = fusion.geo
+    for m, tr in zip(fusion.traffic_reports(40.0, "kestrel"), traffic, strict=True):
+        assert m["destination_id"] == "kestrel" and not wire.violations(m)
+        est = geo.traffic_estimate(wire.decode(wire.encode(m)), -1000)
+        assert est is not None and float(np.linalg.norm(est.pos - tr.x[0:3])) < 0.05
+        assert est.last_hit_t <= 40.0
     # a track held only by acoustic or RF fixes is a column: it says nothing about height
-    for tr in ap.fusion.tracks:  # type: ignore[attr-defined]
+    for tr in fusion.tracks:
         tr.p[2, 2] = 30.0**2
-    assert not ap._traffic(40.0)  # type: ignore[attr-defined]
+    assert not fusion.traffic(40.0)
+
+
+def test_the_fusion_node_recognises_its_own_airborne_node() -> None:
+    """The radar sees Kestrel like any drone. Kestrel's status reports say where it is, so
+    that track is a friend, is never tasked against, and is not sent back to Kestrel as traffic."""
+    from kestrel.rap.loop import AirPicture
+
+    sc = load_scenario(ROOT / "scenarios" / "airfield_picture.yaml")
+    g = SapientExporter(SapientOptions(origin_lla=sc.world.origin_lla, seed=1, altitude_band_m=(0.0, 60.0)))
+    ap = AirPicture(sc, g, include={"radar"}, tasking=True)
+    own_tracks, sent_back, tasked_own = 0, 0, 0
+    for k in range(120):
+        t = 0.5 * k
+        pos = np.array([-20.0 + 2.0 * t, 40.0, 25.0])  # flying east at 2 m/s, 25 m up
+        vel = np.array([2.0, 0.0, 0.0])
+        g.step(t, pos, "observe", [], [], False)
+        out = ap.tick(t, [], (pos, vel))
+        own = [tr for tr in ap.fusion.tracks if tr.own_node == g.camera_node_id]
+        own_tracks += len(own)
+        assert all(tr.identity == "FRIEND" for tr in own)
+        for m in out:
+            if "detection_report" in m:
+                est = g.traffic_estimate(m, -1)
+                sent_back += est is not None and float(np.linalg.norm(est.pos - pos)) < 8.0
+            look = g.look_at(m)
+            tasked_own += look is not None and float(np.linalg.norm(look[1][0:2] - pos[0:2])) < 10.0
+    assert own_tracks > 80, "the radar's track of Kestrel is recognised nearly all the time"
+    assert sent_back == 0 and tasked_own == 0

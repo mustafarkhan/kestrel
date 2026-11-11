@@ -10,8 +10,10 @@ A look ends when Kestrel's camera has reported on that track and the picture can
 it is (drone or bird), when the track is gone, or after ``look_timeout_s``.
 
 The picture is also shared back with Kestrel as **traffic**: every confirmed track the
-fusion node holds in three dimensions (radar or fused, with a measured altitude) is handed
-to Kestrel's separation filter alongside its own camera tracks. Kestrel's camera sees only
+fusion node holds in three dimensions (radar or fused, with a measured altitude) is sent to
+Kestrel as a SAPIENT detection report and enters its separation filter alongside its own
+camera tracks. The ground sensors see Kestrel too; the fusion node recognises that track as
+its own node from Kestrel's status reports and leaves it out. Kestrel's camera sees only
 what is in front of it; without the picture's traffic, a look flown to one aircraft can pass
 under another the radar holds and the camera does not. The traffic can only push Kestrel
 away from an aircraft, never draw it towards one.
@@ -22,12 +24,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
-
 from kestrel.config import Scenario
 from kestrel.geofence import Geofence
+from kestrel.geometry import Vec
 from kestrel.interop.sapient import SapientExporter
-from kestrel.perception.tracker import TrackEstimate
 from kestrel.rap.fusion import FusionNode, Message
 from kestrel.rap.score import PictureScore
 from kestrel.rap.sensors import SensorNetwork
@@ -52,8 +52,6 @@ class AirPicture:
     task_period_s: float = 1.0
     refresh_s: float = 3.0
     look_timeout_s: float = 75.0
-    traffic_max_z_sigma_m: float = 15.0  # tracks shared as traffic must place the aircraft in 3-D
-    traffic_max_h_sigma_m: float = 30.0
     altitude_band_m: tuple[float, float] = (0.0, 60.0)
     score: PictureScore = field(default_factory=PictureScore)
     tasks_sent: int = 0
@@ -78,13 +76,18 @@ class AirPicture:
         self._next_task_t = 0.0
         self.active: Look | None = None
         self.uav_class_t: dict[str, float] = {}  # truth drone -> first time its track was called UAV
-        self.traffic: list[TrackEstimate] = []  # the picture's 3-D tracks, for Kestrel's separation filter
 
-    def tick(self, t: float, birds: list[BirdState]) -> list[Message]:
+    def tick(self, t: float, birds: list[BirdState], own: tuple[Vec, Vec] | None = None) -> list[Message]:
+        """Advance the ground sensors and the fusion node to ``t``.
+
+        Returns the messages the fusion node sends Kestrel: ``LOOK_AT`` tasks, and its 3-D
+        tracks as detection reports (traffic for the separation filter). ``own`` is Kestrel's
+        true position and velocity, which the ground sensors see like any other aircraft.
+        """
         if t < self._next_t:
             return []
         self._next_t += self.dt
-        objects = self.truth.objects(t, birds)
+        objects = self.truth.objects(t, birds, own)
         for msg in self.net.step(t, objects):
             self.fusion.ingest(msg)
         delivered = self.exporter.messages[self._seen :]
@@ -92,34 +95,14 @@ class AirPicture:
         for msg in delivered:
             self.fusion.ingest(msg)
         self.fusion.step(t)
-        self.traffic = self._traffic(t)
+        node = self.exporter.camera_node_id
+        out = self.fusion.traffic_reports(t, node) if node in self.fusion.node_types else []
         picture = self.fusion.picture(t)
         self.score.add(t, self.dt, objects, picture, self.fusion, self.fence)
         if not self.tasking or t < self._next_task_t:
-            return []
+            return out
         self._next_task_t += self.task_period_s
-        return self._task(t)
-
-    def _traffic(self, t: float) -> list[TrackEstimate]:
-        out = []
-        for tr in self.fusion.tracks:
-            if not self.fusion.confirmed(tr):
-                continue
-            x, p = self.fusion._predict(tr, t)
-            if p[2, 2] > self.traffic_max_z_sigma_m**2 or p[0, 0] + p[1, 1] > self.traffic_max_h_sigma_m**2:
-                continue  # a column (acoustic or RF fix) says nothing about height
-            out.append(
-                TrackEstimate(
-                    ident=-1000 - tr.ident,  # apart from Kestrel's own track ids and its cues
-                    pos=np.array(x[0:3]),
-                    vel=np.array(x[3:6]),
-                    cov=np.array(p),
-                    confirmed=True,
-                    hits=tr.updates,
-                    last_hit_t=tr.t,  # the separation filter widens the keep-out with the age
-                )
-            )
-        return out
+        return out + self._task(t)
 
     def _task(self, t: float) -> list[Message]:
         live = {tr.ident: tr for tr in self.fusion.tracks}
