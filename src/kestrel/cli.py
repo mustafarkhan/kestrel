@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
+import signal
+import ssl
 import sys
+import threading
 from pathlib import Path
 
 from kestrel.config import Config, Scenario, load_config, load_scenario
@@ -172,6 +176,69 @@ def cmd_fuse(args: argparse.Namespace) -> int:
     return 0
 
 
+def _endpoint(text: str, default_host: str = "127.0.0.1") -> tuple[str, int]:
+    host, _, port = text.rpartition(":")
+    return host or default_host, int(port)
+
+
+def _tls(args: argparse.Namespace, server: bool) -> ssl.SSLContext | None:
+    given = [args.tls_ca, args.tls_cert, args.tls_key]
+    if not any(given):
+        return None
+    if not all(given):
+        sys.exit("TLS needs all of --tls-ca, --tls-cert and --tls-key")
+    from kestrel.interop.wire import tls_context
+
+    return tls_context(args.tls_ca, args.tls_cert, args.tls_key, server)
+
+
+def _stop_on_signal() -> threading.Event:
+    stop = threading.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: stop.set())
+    return stop
+
+
+def cmd_fusion(args: argparse.Namespace) -> int:
+    from kestrel.rap.service import FusionService, ServiceOptions, summary_line
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    site = load_scenario(args.site)
+    host, port = _endpoint(args.listen)
+    tls = _tls(args, server=True)
+    if tls is None and host not in ("127.0.0.1", "localhost", "::1"):
+        if not args.insecure:
+            sys.exit(
+                "refusing to listen beyond this machine without TLS: anyone on the network could "
+                "inject tracks or read the picture. Pass --tls-ca/--tls-cert/--tls-key, or --insecure "
+                "on an isolated network."
+            )
+        print("WARNING: listening without TLS; the network itself must be trusted", file=sys.stderr)
+    sensors = site.sensors
+    whitelist = [x for x in (args.whitelist or "").split(",") if x] or (sensors.whitelist if sensors else [])
+    opts = ServiceOptions(
+        host=host,
+        port=port,
+        period_s=args.period,
+        tasking=not args.no_tasking,
+        tls=tls,
+        out=Path(args.out) if args.out else None,
+    )
+    svc = FusionService(site.world, whitelist, sensors.protected if sensors else {}, opts)
+    print(f"fusion node {svc.fusion.node_id} listening on {host}:{svc.server.port} (site '{site.name}')")
+    svc.run(_stop_on_signal(), None if args.quiet else lambda pic: print(summary_line(pic), flush=True))
+    return 0
+
+
+def cmd_send(args: argparse.Namespace) -> int:
+    from kestrel.rap.service import stream_log
+
+    host, port = _endpoint(args.connect)
+    n = stream_log(args.input, host, port, args.speed, _tls(args, server=False), _stop_on_signal())
+    print(f"{n} messages sent to {host}:{port}")
+    return 0
+
+
 def cmd_evaluate(args: argparse.Namespace) -> int:
     from kestrel.perception.evaluate import READERS, evaluate
 
@@ -298,6 +365,30 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", help="config YAML whose detector settings to use")
     p.add_argument("--out", default="evaluation.json")
     p.set_defaults(func=cmd_evaluate)
+
+    def tls_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--tls-ca", help="CA certificate both ends must be signed by (mutual TLS 1.3)")
+        p.add_argument("--tls-cert", help="this end's certificate")
+        p.add_argument("--tls-key", help="this end's private key")
+
+    p = sub.add_parser("fusion", help="run the fusion node as a live SAPIENT service")
+    p.add_argument("--site", required=True, help="site YAML: origin, fence, protected areas, whitelist")
+    p.add_argument("--listen", default="127.0.0.1:5020", help="host:port to accept SAPIENT nodes on")
+    p.add_argument("--out", help="append the air picture here, one JSON line per period")
+    p.add_argument("--period", type=float, default=1.0)
+    p.add_argument("--whitelist", help="comma-separated friendly Remote ID serials (default: the site's)")
+    p.add_argument("--no-tasking", action="store_true", help="listen and fuse only; send no LOOK_AT tasks")
+    p.add_argument("--insecure", action="store_true", help="allow a non-local listener without TLS")
+    p.add_argument("--quiet", action="store_true")
+    tls_args(p)
+    p.set_defaults(func=cmd_fusion)
+
+    p = sub.add_parser("send", help="replay a recorded SAPIENT log to a fusion node in real time")
+    p.add_argument("input")
+    p.add_argument("--connect", required=True, help="host:port of the fusion node")
+    p.add_argument("--speed", type=float, default=1.0)
+    tls_args(p)
+    p.set_defaults(func=cmd_send)
 
     p = sub.add_parser("fly", help="fly an ArduPilot vehicle over MAVLink (SITL or real)")
     p.add_argument("instruction")

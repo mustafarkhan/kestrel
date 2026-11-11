@@ -102,6 +102,7 @@ def snapshot(
                 "p_uav": round(tr.p_uav, 3),
                 "identity": tr.identity,
                 "remote_id": tr.remote_id,
+                "own_node": tr.own_node,
                 "sensors": sorted(tr.node_types),
             }
         )

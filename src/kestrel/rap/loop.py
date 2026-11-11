@@ -31,15 +31,9 @@ from kestrel.interop.sapient import SapientExporter
 from kestrel.rap.fusion import FusionNode, Message
 from kestrel.rap.score import PictureScore
 from kestrel.rap.sensors import SensorNetwork
+from kestrel.rap.tasking import LookTasker
 from kestrel.rap.truth import Truth
 from kestrel.sim.birds import BirdState
-
-
-@dataclass
-class Look:
-    track: int
-    start_t: float
-    last_sent_t: float
 
 
 @dataclass
@@ -54,8 +48,6 @@ class AirPicture:
     look_timeout_s: float = 75.0
     altitude_band_m: tuple[float, float] = (0.0, 60.0)
     score: PictureScore = field(default_factory=PictureScore)
-    tasks_sent: int = 0
-    looks: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         net_cfg = self.scenario.sensors
@@ -74,7 +66,7 @@ class AirPicture:
         self._seen = 0
         self._next_t = 0.0
         self._next_task_t = 0.0
-        self.active: Look | None = None
+        self.tasker = LookTasker(self.fusion, self.refresh_s, self.look_timeout_s)
         self.uav_class_t: dict[str, float] = {}  # truth drone -> first time its track was called UAV
 
     def tick(self, t: float, birds: list[BirdState], own: tuple[Vec, Vec] | None = None) -> list[Message]:
@@ -102,41 +94,11 @@ class AirPicture:
         if not self.tasking or t < self._next_task_t:
             return out
         self._next_task_t += self.task_period_s
-        return out + self._task(t)
-
-    def _task(self, t: float) -> list[Message]:
-        live = {tr.ident: tr for tr in self.fusion.tracks}
-        look = self.active
-        if look is not None:
-            tr = live.get(look.track)
-            # A look is done when the camera has seen the track and the picture can now say what
-            # it is, when the track is gone, or when it has taken too long.
-            resolved = (
-                tr is not None and tr.camera_t >= look.start_t and self.fusion.class_of(tr) != "Unknown"
-            )
-            done = tr is None or resolved or t - look.start_t > self.look_timeout_s
-            if done:
-                outcome = "gone" if tr is None else ("resolved" if resolved else "timeout")
-                self.looks.append(
-                    {"track": look.track, "start_t": look.start_t, "end_t": t, "outcome": outcome}
-                )
-                self.active = None
-            elif tr is not None and t - look.last_sent_t >= self.refresh_s:
-                look.last_sent_t = t
-                self.tasks_sent += 1
-                return [self.fusion.look_at_task(t, tr)]
-            else:
-                return []
-        cand = self.fusion.most_needed_look(t)
-        if cand is None or self.fusion.camera_node is None:
-            return []
-        self.active = Look(cand.ident, t, t)
-        self.tasks_sent += 1
-        return [self.fusion.look_at_task(t, cand)]
+        return out + self.tasker.step(t)
 
     def summary(self) -> dict[str, Any]:
         out: dict[str, Any] = dict(self.score.summary())
-        out["tasks_sent"] = self.tasks_sent
-        out["looks"] = len(self.looks) + (self.active is not None)
-        out["looks_resolved"] = sum(lk["outcome"] == "resolved" for lk in self.looks)
+        out["tasks_sent"] = self.tasker.tasks_sent
+        out["looks"] = len(self.tasker.looks) + (self.tasker.active is not None)
+        out["looks_resolved"] = sum(lk["outcome"] == "resolved" for lk in self.tasker.looks)
         return out
