@@ -230,7 +230,28 @@ def cmd_fusion(args: argparse.Namespace) -> int:
     )
     svc = FusionService(site.world, whitelist, sensors.protected if sensors else {}, opts)
     print(f"fusion node {svc.fusion.node_id} listening on {host}:{svc.server.port} (site '{site.name}')")
-    svc.run(_stop_on_signal(), None if args.quiet else lambda pic: print(summary_line(pic), flush=True))
+    cot = None
+    if args.cot:
+        from kestrel.interop.cot import CotSender
+
+        cot = CotSender(*_endpoint(args.cot))
+        print(f"sending the picture as Cursor on Target to {args.cot}")
+
+    def console() -> None:  # the operator's identification decisions, one per line
+        for line in sys.stdin:
+            if line.strip():
+                print(svc.operator_command(line), flush=True)
+
+    if not args.no_console and sys.stdin is not None and sys.stdin.isatty():
+        threading.Thread(target=console, name="operator", daemon=True).start()
+
+    def on_picture(pic: dict[str, Any]) -> None:
+        if cot is not None:
+            cot.send(pic)
+        if not args.quiet:
+            print(summary_line(pic), flush=True)
+
+    svc.run(_stop_on_signal(), on_picture)
     return 0
 
 
@@ -459,6 +480,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-tasking", action="store_true", help="listen and fuse only; send no LOOK_AT tasks")
     p.add_argument("--insecure", action="store_true", help="allow a non-local listener without TLS")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--cot", help="also send tracks as Cursor on Target over UDP, e.g. 239.2.3.1:6969 (ATAK)")
+    p.add_argument(
+        "--no-console", action="store_true", help="do not read operator commands from the terminal"
+    )
     tls_args(p)
     p.set_defaults(func=cmd_fusion)
 

@@ -191,3 +191,55 @@ def test_a_recorded_log_can_be_streamed_to_a_live_fusion_node(recorded: PictureR
         assert svc.fusion.reports > 0
     finally:
         svc.close()
+
+
+def test_only_an_operator_makes_a_track_hostile_and_displays_are_told(recorded: PictureRun) -> None:
+    import socket
+    import xml.etree.ElementTree as ET
+
+    from kestrel.interop.cot import CotSender, events
+
+    sc = recorded.scenario
+    assert sc.sensors is not None
+    geo = recorded.fusion.geo
+    clock = FakeClock()
+    svc = FusionService(sc.world, sc.sensors.whitelist, sc.sensors.protected, ServiceOptions(port=0), clock)
+    try:
+        for m in recorded.messages:
+            if geo.sim_time(m["timestamp"]) < 60.0:
+                svc.fusion.ingest(m)
+        clock.t = EPOCH + 60.0
+        picture = svc.tick()
+        assert picture["tracks"] and all(t["identity"] != "HOSTILE" for t in picture["tracks"])
+        suspect = next(t for t in picture["tracks"] if t["identity"] in ("UNKNOWN", "SUSPECT"))
+        assert "commands:" in svc.operator_command("shoot it")
+        assert "refused" in svc.operator_command("declare 99999 HOSTILE")
+        assert "refused" in svc.operator_command(f"declare {suspect['id']} ENEMY")
+        assert "declared HOSTILE" in svc.operator_command(f"declare {suspect['id']} hostile")
+        picture = svc.tick()
+        hostile = [t for t in picture["tracks"] if t["identity"] == "HOSTILE"]
+        assert [t["id"] for t in hostile] == [suspect["id"]]
+        assert picture["declared_by_operator"][0]["track"] == suspect["id"]
+
+        # Cursor on Target: one well-formed event per track that is not a bird
+        xml = events(picture)
+        assert len(xml) == sum(t["class"] != "Bird" for t in picture["tracks"])
+        by_uid = {ET.fromstring(x).get("uid"): ET.fromstring(x) for x in xml}
+        ev = by_uid[f"KESTREL-{suspect['id']}"]
+        assert str(ev.get("type")).startswith("a-h-A")
+        point = ev.find("point")
+        assert point is not None and abs(float(str(point.get("lat"))) - suspect["lat"]) < 1e-6
+        friend = next(t for t in picture["tracks"] if t["identity"] == "FRIEND")
+        assert str(by_uid[f"KESTREL-{friend['id']}"].get("type")).startswith("a-f-A")
+        assert ev.get("stale") > ev.get("time")  # type: ignore[operator]
+
+        rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        rx.bind(("127.0.0.1", 0))
+        rx.settimeout(2.0)
+        sender = CotSender("127.0.0.1", rx.getsockname()[1])
+        sender.send(picture)
+        assert ET.fromstring(rx.recv(65535)).tag == "event" and sender.sent == len(xml)
+        sender.close()
+        rx.close()
+    finally:
+        svc.server.close()

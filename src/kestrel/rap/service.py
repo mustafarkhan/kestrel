@@ -94,6 +94,7 @@ class FusionService:
         self.health: dict[str, _NodeHealth] = {}
         self.rejected: Counter[str] = Counter()
         self.task_acks: Counter[str] = Counter()
+        self.declarations: list[dict[str, Any]] = []
         self.pictures = 0
         self._lock = threading.Lock()
         self._out: IO[str] | None = None
@@ -156,7 +157,26 @@ class FusionService:
     def declare(self, track: int, identity: str) -> None:
         """Record an operator's identification of a track (the only way ``HOSTILE`` is set)."""
         with self._lock:
+            if track not in {tr.ident for tr in self.fusion.tracks}:
+                raise ValueError(f"no track {track} in the picture")
             self.fusion.declare(track, identity)
+            self.declarations.append({"t": round(self.now(), 1), "track": track, "identity": identity})
+        log.warning("operator declared track %d %s", track, identity)
+
+    def operator_command(self, line: str) -> str:
+        """One line from the operator's console: ``declare <track> <IDENTITY>``.
+
+        Identification is a human decision. This is the only path by which a track becomes
+        ``HOSTILE`` (or is overruled to anything else), and every use is kept in the picture.
+        """
+        words = line.split()
+        if len(words) == 3 and words[0].lower() == "declare" and words[1].isdigit():
+            try:
+                self.declare(int(words[1]), words[2].upper())
+            except ValueError as e:
+                return f"refused: {e}"
+            return f"track {words[1]} declared {words[2].upper()}"
+        return "commands: declare <track id> <FRIEND|ASSUMED_FRIEND|NEUTRAL|SUSPECT|UNKNOWN|HOSTILE>"
 
     # ------------------------------------------------------------------ output
     def tick(self) -> dict[str, Any]:
@@ -185,6 +205,7 @@ class FusionService:
             ]
             picture["rejected"] = dict(self.rejected) | {"by the link": self.server.rejected}
             picture["tasks"] = {"sent": self.tasker.tasks_sent, "acks": dict(self.task_acks)}
+            picture["declared_by_operator"] = list(self.declarations)
         for m in outgoing:
             self.server.send(m)
         self.pictures += 1
