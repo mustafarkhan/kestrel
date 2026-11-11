@@ -282,16 +282,20 @@ the picture only listens to Kestrel's reports, or it tasks Kestrel to go and loo
 
 | with Kestrel | hostile drones classified as UAV | first track to UAV (median / p90) | drone-time shown as UAV | drone-time shown as bird | looks flown per mission | missions completed | runs inside 12 m | closest approach |
 |---|---|---|---|---|---|---|---|---|
-| picture without tasking | 20/24 | 7 s / 80 s | 83% | 0% | 0.0 | 24/24 | 0/24 | 44.6 m |
-| picture tasks Kestrel | 23/24 | 16 s / 46 s | 92% | 0% | 7.2 | 24/24 | 0/24 | 12.4 m |
+| picture without tasking | 21/24 | 5 s / 54 s | 86% | 0% | 0.0 | 24/24 | 0/24 | 38.7 m |
+| picture tasks Kestrel | 23/24 | 5 s / 34 s | 92% | 0% | 7.1 | 24/24 | 1/24 | 11.6 m |
 
-Tasking classified the hostile drone in 23 of 24 encounters against 20, and cut the 90th percentile from first
-track to *UAV* from 80 s to 46 s. The median rose from 7 to 16 s only because tasking adds the hard cases: on the
-19 encounters classified both ways, tasking was faster in 7 and never slower. Untasked, Kestrel classified one
-encounter (236 s after the first track) that tasked it did not. The cost is proximity: sent to look, Kestrel came
-to 12.4 m of a drone at closest, against 44.6 m standing by, and no run went inside 12 m. That only holds since the
-picture's 3-D tracks reach Kestrel's separation filter: before, one tasked look flew under the hostile drone, held
-by the radar 10 m above Kestrel and out of its camera's view ([0015](docs/decisions/0015-air-picture.md)).
+Tasking classified the hostile drone in 23 of 24 encounters against 21, and cut the 90th percentile from first
+track to *UAV* from 54 s to 34 s; on the 21 encounters classified both ways, tasking was faster in 3 and never
+slower, and one encounter was classified neither way. The cost is proximity. Sent to look, Kestrel came to 11.6 m
+of a drone at closest, against 38.7 m standing by, and **one tasked run was inside the 12 m limit, for 0.8 s**: the
+drone was seen, tracked and being avoided, and kept closing while Kestrel fled at its own top speed, so the escape
+fell 0.4 m short. That is the limit of avoidance between aircraft of equal speed, not a blind spot, and it is
+published rather than tuned away on these seeds. Since v0.6 the ground sensors see Kestrel itself, the fusion node
+recognises its own aircraft, and the picture's 3-D tracks reach Kestrel's separation filter as SAPIENT reports:
+before that traffic existed, one tasked look flew under a drone the radar held 10 m above Kestrel and out of its
+camera's view ([0015](docs/decisions/0015-air-picture.md)). These encounters (seeds 8000-8023) have now been flown
+three times as the loop changed, so they are no longer unseen data.
 
 ![Mission overview](docs/figures/overview.png)
 

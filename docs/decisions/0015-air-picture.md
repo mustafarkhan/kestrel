@@ -57,7 +57,9 @@ the picture, and lets it task Kestrel.
 ## Results
 
 The air-picture tables in the README (picture: seeds 7000–7023; with Kestrel: 8000–8023,
-neither used while developing), discussed in [air-picture.md](../air-picture.md#results).
+not used while developing v0.4; the loop encounters have been re-flown since as the loop changed), discussed in [air-picture.md](../air-picture.md#results).
 In short: fused, 96% of drone-time is shown as *UAV* against 72% for radar alone, with 2% of
 bird-time shown as *UAV*; friends are shown as *friend* 82% of the time; tasking Kestrel
-classified the radio-silent hostile in 23 of 24 encounters against 20, with no run inside 12 m.
+classified the radio-silent hostile in 23 of 24 encounters against 21. As re-flown for v0.6
+(the ground sensors now see Kestrel itself), one tasked run was inside 12 m for 0.8 s (11.6 m),
+against an aircraft Kestrel was already escaping from at equal speed.
