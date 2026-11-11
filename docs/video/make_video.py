@@ -1156,6 +1156,53 @@ def slide_night(matrix: dict[str, Any]) -> list[Image.Image]:
     return list(faded(hold(r, 11.0)))
 
 
+# --------------------------------------------------------------------------- out of the simulator
+
+FIELDABLE = [
+    ("Sensors connect", "SAPIENT in its binary wire format over TCP, mutual TLS on both ends"),
+    (
+        "The picture runs live",
+        "kestrel fusion: the benchmarked fusion node as a service, feeding TAK displays",
+    ),
+    ("The flight loop sees", "camera, tasks and traffic in kestrel fly; a pilot taking over always wins"),
+    ("Checked before arming", "kestrel preflight: autopilot, GNSS, site, battery, camera, link, failsafes"),
+    ("Bad input is refused", "nonsense from a sensor, a mistyped fence or limit: stopped and counted"),
+    ("Hostile is a human decision", "set only by an operator's declaration, recorded in the picture"),
+]
+
+
+def slide_fieldable() -> list[Image.Image]:
+    def r(t: float) -> Image.Image:
+        im = blank()
+        d = ImageDraw.Draw(im)
+        d.text(
+            (96, 50),
+            "17  Out of the simulator: ready for integration testing",
+            fill=BLUE,
+            font=sans(26, "SemiBold"),
+        )
+        for i, (what, how) in enumerate(FIELDABLE):
+            if t < 0.5 * i:
+                continue
+            y = 112 + 66 * i
+            d.text((96, y), what, fill=INK, font=sans(23, "Medium"))
+            d.text((126, y + 31), how, fill=AQUA, font=sans(19))
+        if t > 4.0:
+            d.text(
+                (96, 530), "Still open, and not closable in software:", fill=ORANGE, font=sans(22, "SemiBold")
+            )
+            d.text(
+                (96, 564),
+                "a flight on a real airframe · real footage · a real sensor connected · certification",
+                fill=INK2,
+                font=sans(21),
+            )
+        footer(d, "23 gaps closed, each guarded by a test or CI job; every open item and who closes it: docs/readiness.md")
+        return im
+
+    return list(faded(hold(r, 12.0)))
+
+
 # --------------------------------------------------------------------------- birds
 
 
@@ -1495,7 +1542,7 @@ def slide_standards() -> list[Image.Image]:
         d = ImageDraw.Draw(im)
         d.text(
             (96, 60),
-            "17  Held against published standards and field reports",
+            "18  Held against published standards and field reports",
             fill=BLUE,
             font=sans(26, "SemiBold"),
         )
@@ -1547,7 +1594,7 @@ def slide_notes() -> list[Image.Image]:
         im = blank()
         d = ImageDraw.Draw(im)
         d.text(
-            (96, 70), "18  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
+            (96, 70), "19  What simulation caught before any hardware", fill=BLUE, font=sans(26, "SemiBold")
         )
         for i, (prob, fix) in enumerate(NOTES):
             if t < 0.5 * i:
@@ -1578,7 +1625,7 @@ def slide_next() -> list[Image.Image]:
     def r(t: float) -> Image.Image:
         im = blank()
         d = ImageDraw.Draw(im)
-        d.text((96, 120), "19  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
+        d.text((96, 120), "20  Where this stands", fill=BLUE, font=sans(26, "SemiBold"))
         for i, (k, v) in enumerate(rows):
             if t < 0.6 * i:
                 continue
@@ -1710,6 +1757,7 @@ def main() -> None:
         ("air picture", lambda: picture_frames(picture_run)),
         ("picture results", lambda: slide_picture_results(picture_summary, loop_summary)),
         ("night", lambda: slide_night(matrix)),
+        ("fieldable", slide_fieldable),
         ("standards", slide_standards),
         ("notes", slide_notes),
         ("next", slide_next),

@@ -15,6 +15,15 @@ Engineering notes, each from a real failure:
   height.
 * **Frames in one place.** MAVLink is NED/FRD; Kestrel is ENU/FLU. All conversion
   happens in this file and nowhere else.
+* **The site frame.** A site file gives its fence, sites and protected areas in metres east
+  and north of a surveyed origin. The autopilot's local frame starts wherever the EKF
+  origin happens to be. ``align_to_site`` takes the vehicle's own global position on the
+  ground and shifts the local frame so both agree horizontally; height stays relative to
+  the take-off point, because GNSS altitude is too poor to compare with a surveyed one.
+  Without it, the fence would be centred on the take-off point, wherever that is.
+* **Somebody else may be flying.** A safety pilot who switches out of GUIDED has taken the
+  aircraft. ``pilot_has_control`` reports it so the mission loop stops sending setpoints
+  instead of fighting for the vehicle.
 * **PX4 is not claimed.** PX4 OFFBOARD needs a pre-armed setpoint stream and
   different mode handling. It is detected and refused rather than half-supported.
 """
@@ -30,6 +39,7 @@ import numpy as np
 from pymavlink import mavutil
 
 from kestrel.geometry import Vec, enu_to_ned, ned_to_enu, rot_to_quat
+from kestrel.interop.utm import lla_to_enu
 from kestrel.types import FlightMode, Setpoint, VehicleState
 
 M = mavutil.mavlink
@@ -74,6 +84,11 @@ class _Telemetry:
     battery_pct: float = -1.0
     landed: bool | None = None
     last_heartbeat: float = 0.0
+    last_position: float = 0.0  # monotonic time of the last local position
+    lla: tuple[float, float, float] | None = None  # degrees, degrees, metres above mean sea level
+    gps_fix: int = 0
+    gps_sats: int = 0
+    battery_v: float = 0.0
 
 
 class MavlinkVehicle:
@@ -102,6 +117,9 @@ class MavlinkVehicle:
         self._acks: dict[int, int] = {}
         self._ack_cv = threading.Condition(self._lock)
         self._origin_ned: Vec | None = None
+        self._site_origin: tuple[float, float, float] | None = None
+        self._site_offset = np.zeros(3)  # take-off point in the site frame (east, north, 0)
+        self._params: dict[str, float] = {}
         self._running = True
         self._boot_wall = time.monotonic()
         self.statustext: list[str] = []
@@ -112,7 +130,12 @@ class MavlinkVehicle:
         interval_us = int(1e6 / telemetry_hz)
         for msg_id in (M.MAVLINK_MSG_ID_LOCAL_POSITION_NED, M.MAVLINK_MSG_ID_ATTITUDE_QUATERNION):
             self._command(M.MAV_CMD_SET_MESSAGE_INTERVAL, msg_id, interval_us, wait=False)
-        for msg_id in (M.MAVLINK_MSG_ID_SYS_STATUS, M.MAVLINK_MSG_ID_EXTENDED_SYS_STATE):
+        for msg_id in (
+            M.MAVLINK_MSG_ID_SYS_STATUS,
+            M.MAVLINK_MSG_ID_EXTENDED_SYS_STATE,
+            M.MAVLINK_MSG_ID_GLOBAL_POSITION_INT,
+            M.MAVLINK_MSG_ID_GPS_RAW_INT,
+        ):
             self._command(M.MAV_CMD_SET_MESSAGE_INTERVAL, msg_id, 500_000, wait=False)
 
     # ------------------------------------------------------------------ threads
@@ -128,6 +151,7 @@ class MavlinkVehicle:
                     tel.pos_ned = np.array([msg.x, msg.y, msg.z])
                     tel.vel_ned = np.array([msg.vx, msg.vy, msg.vz])
                     tel.t = msg.time_boot_ms / 1000.0
+                    tel.last_position = time.monotonic()
                 elif kind == "ATTITUDE_QUATERNION":
                     tel.quat_enu = quat_ned_frd_to_enu_flu(np.array([msg.q1, msg.q2, msg.q3, msg.q4]))
                     tel.omega_flu = np.array([msg.rollspeed, -msg.pitchspeed, -msg.yawspeed])
@@ -137,6 +161,14 @@ class MavlinkVehicle:
                     tel.last_heartbeat = time.monotonic()
                 elif kind == "SYS_STATUS":
                     tel.battery_pct = float(msg.battery_remaining)
+                    tel.battery_v = msg.voltage_battery / 1000.0
+                elif kind == "GLOBAL_POSITION_INT":
+                    tel.lla = (msg.lat / 1e7, msg.lon / 1e7, msg.alt / 1000.0)
+                elif kind == "GPS_RAW_INT":
+                    tel.gps_fix, tel.gps_sats = int(msg.fix_type), int(msg.satellites_visible)
+                elif kind == "PARAM_VALUE":
+                    self._params[str(msg.param_id).rstrip("\x00")] = float(msg.param_value)
+                    self._ack_cv.notify_all()
                 elif kind == "EXTENDED_SYS_STATE":
                     tel.landed = msg.landed_state == M.MAV_LANDED_STATE_ON_GROUND
                 elif kind == "COMMAND_ACK":
@@ -189,6 +221,71 @@ class MavlinkVehicle:
             time.sleep(0.2)
         raise MavlinkError("no local position estimate: is the EKF origin set (GPS fix / origin)?")
 
+    # ------------------------------------------------------------------ health and site
+    def telemetry_age_s(self) -> float:
+        """Seconds since the last position from the autopilot (infinite before the first)."""
+        with self._lock:
+            last = self._tel.last_position
+        return time.monotonic() - last if last else math.inf
+
+    def heartbeat_age_s(self) -> float:
+        with self._lock:
+            last = self._tel.last_heartbeat
+        return time.monotonic() - last if last else math.inf
+
+    def pilot_has_control(self) -> bool:
+        """Armed and in a mode this program did not ask for: a pilot or a failsafe has the aircraft."""
+        with self._lock:
+            tel = self._tel
+            ours = {self.modes.get("GUIDED"), self.modes.get("LAND")}
+            return tel.armed and tel.custom_mode >= 0 and tel.custom_mode not in ours
+
+    def mode_name(self) -> str:
+        with self._lock:
+            mode = self._tel.custom_mode
+        return next((k for k, v in self.modes.items() if v == mode), str(mode))
+
+    def global_position(self) -> tuple[float, float, float] | None:
+        with self._lock:
+            return self._tel.lla
+
+    def gps(self) -> tuple[int, int]:
+        """GNSS fix type (3 = 3-D fix or better is 3 and above) and satellites in view."""
+        with self._lock:
+            return self._tel.gps_fix, self._tel.gps_sats
+
+    def battery_voltage(self) -> float:
+        with self._lock:
+            return self._tel.battery_v
+
+    def param(self, name: str, timeout_s: float = 2.0) -> float | None:
+        """Read one autopilot parameter (``None`` if it does not answer)."""
+        with self._lock:
+            self._params.pop(name, None)
+        self.conn.mav.param_request_read_send(self.sys, self.comp, name.encode("ascii"), -1)
+        deadline = time.monotonic() + timeout_s
+        with self._ack_cv:
+            while name not in self._params:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not self._ack_cv.wait(remaining):
+                    return None
+            return self._params[name]
+
+    def align_to_site(self, origin_lla: tuple[float, float, float]) -> Vec:
+        """Express positions in the site's frame (metres east and north of ``origin_lla``).
+
+        Call on the ground before arming. Returns the take-off point in the site frame; its
+        height is zero by definition (heights stay relative to the take-off point).
+        """
+        lla = self.global_position()
+        if lla is None:
+            raise MavlinkError("no global position yet: cannot place the vehicle on the site")
+        e, n, _ = lla_to_enu(origin_lla, lla[0], lla[1], origin_lla[2])
+        with self._lock:
+            self._site_origin = origin_lla
+            self._site_offset = np.array([e, n, 0.0])
+            return self._site_offset.copy()
+
     # ------------------------------------------------------------------ Vehicle API
     def state(self) -> VehicleState:
         with self._lock:
@@ -196,7 +293,7 @@ class MavlinkVehicle:
             if tel.pos_ned is None or tel.vel_ned is None or tel.quat_enu is None:
                 raise MavlinkError("no navigation solution yet; call wait_ready() first")
             origin = self._origin_ned if self._origin_ned is not None else tel.pos_ned
-            pos = ned_to_enu(tel.pos_ned - origin)
+            pos = ned_to_enu(tel.pos_ned - origin) + self._site_offset
             vel = ned_to_enu(tel.vel_ned)
             mode = FlightMode.DISARMED
             if tel.armed:
@@ -242,7 +339,8 @@ class MavlinkVehicle:
     def set_setpoint(self, sp: Setpoint) -> None:
         with self._lock:
             origin = self._origin_ned if self._origin_ned is not None else np.zeros(3)
-        p = enu_to_ned(np.asarray(sp.pos)) + origin
+            offset = self._site_offset
+        p = enu_to_ned(np.asarray(sp.pos) - offset) + origin
         v = enu_to_ned(np.asarray(sp.vel))
         a = enu_to_ned(np.asarray(sp.acc))
         boot_ms = int((time.monotonic() - self._boot_wall) * 1000) & 0xFFFFFFFF

@@ -6,6 +6,6 @@ authors:
     given-names: Mustafa R.
 repository-code: "https://github.com/mustafarkhan/kestrel"
 license: Apache-2.0
-version: 0.5.0
-date-released: 2026-11-10
+version: 0.6.0
+date-released: 2026-11-11
 keywords: [UAV, drones, autonomy, counter-UAS, air-to-air detection, multi-target tracking, run-time assurance, LLM, MAVLink, ArduPilot]

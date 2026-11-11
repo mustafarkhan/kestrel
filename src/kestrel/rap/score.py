@@ -88,7 +88,7 @@ class PictureScore:
         self.gospa.append(math.sqrt(loc + CUTOFF_M**2 / 2.0 * (miss + false)))
         self.missed.append(miss)
         self.false.append(false)
-        friends = [o for o in objs if o.role == "friendly"]
+        friends = [o for o in objs if o.role in ("friendly", "own")]
         for tr in trks:
             if tr.identity in ("FRIEND", "ASSUMED_FRIEND") and not any(
                 float(np.linalg.norm(o.pos[0:2] - tr.pos[0:2])) < CUTOFF_M for o in friends
@@ -103,6 +103,8 @@ class PictureScore:
                 self.dup_s += dt
         self.object_s += dt * n
         for i, o in enumerate(objs):
+            if o.role == "own":
+                continue  # our own airborne node: matched so it is no false track, scored nowhere
             if o.kind == "uav":
                 self.entry_t.setdefault(o.key, t)
                 if o.role == "hostile":

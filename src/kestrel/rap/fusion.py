@@ -35,6 +35,7 @@ task for the airborne camera node: the cue-to-confirm loop run from the fusion n
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -74,6 +75,12 @@ class FusionOptions:
     suspect_horizon_s: float = 60.0  # heading into a protected area within this time
     look_recent_s: float = 15.0  # a camera saw it this recently: no need to look again
     retask_s: float = 30.0  # do not re-task the same track sooner
+    own_fresh_s: float = 3.0  # a mobile node's reported position is trusted this long
+    own_gate_m: float = 10.0  # a track this near a mobile node's own position is that node
+    own_speed_mps: float = 12.0  # the gate grows by this per second of position age
+    traffic_max_z_sigma_m: float = 15.0  # traffic for a mobile node must place the aircraft in 3-D
+    traffic_max_h_sigma_m: float = 30.0
+    max_tracks: int = 2000  # new tracks beyond this are refused: a flood cannot stall the picture
 
 
 @dataclass
@@ -116,6 +123,7 @@ class RapTrack:
     tasked_t: float = -math.inf
     close: dict[int, float] = field(default_factory=dict)  # other track -> time it became close
     merged_from: list[int] = field(default_factory=list)
+    own_node: str | None = None  # the mobile SAPIENT node this track is (its own reported position)
 
     @property
     def p_uav(self) -> float:
@@ -130,9 +138,26 @@ class RapTrack:
         return self.x[3:6]
 
 
+MAX_SIGMA_M = 10_000.0  # a stated position error above this (or negative, or not a number) is refused
+MAX_SPEED_MPS = 400.0  # as is a stated speed above this
+MAX_ID_CHARS = 128  # object ids, serials and protocol names are cut to this
+
+
+class BadReport(ValueError):
+    """A report whose content cannot be fused; the message is the reason shown to the operator."""
+
+
+def _sigmas(msg: Message, keys: tuple[str, ...], default: float, limit: float) -> Vec:
+    s = np.array([float(msg.get(k, default)) for k in keys])
+    s[s == 0.0] = default  # zero is how an unset protobuf field reads: unstated, not perfect
+    if not np.all(np.isfinite(s)) or np.any(s < 0.0) or np.any(s > limit):
+        raise BadReport("error not finite, negative or absurd")
+    return s
+
+
 def _sigma_cov(loc: Message, default: float) -> Vec:
-    s = [float(loc.get(k, default)) for k in ("x_error", "y_error", "z_error")]
-    return np.diag(np.maximum(np.array(s), 0.1) ** 2)
+    s = _sigmas(loc, ("x_error", "y_error", "z_error"), default, MAX_SIGMA_M)
+    return np.diag(np.maximum(s, 0.1) ** 2)
 
 
 def site_disc(site: Site, point_radius: float = 40.0) -> tuple[Vec, float]:
@@ -174,7 +199,11 @@ class FusionNode:
         self.t = 0.0
         self.camera_node: str | None = None
         self.reports = 0
+        self.rejected: Counter[str] = Counter()  # reports refused, by reason
         self.node_id = geo.new_node_id()  # the fusion node's own SAPIENT identity, for its tasks
+        self.mobile_nodes: set[str] = set()
+        self.node_pos: dict[str, tuple[float, Vec]] = {}  # mobile node -> (time, reported position)
+        self._traffic_ids: dict[int, str] = {}
 
     # ------------------------------------------------------------------ input
     def ingest(self, msg: Message) -> None:
@@ -188,13 +217,37 @@ class FusionNode:
             self.node_tracking[node] = (
                 modes[0].get("tracking_type", "TRACKING_TYPE_TRACK") != "TRACKING_TYPE_NONE"
             )
-            if kind == "NODE_TYPE_CAMERA" and any(m.get("task") for m in modes):
+            if kind == "NODE_TYPE_CAMERA" and any((m.get("task") or {}).get("command") for m in modes):
                 self.camera_node = node
+            if any(d.get("node_type") == "NODE_TYPE_MOBILE_NODE" for d in defs):
+                self.mobile_nodes.add(node)
+            return
+        status = msg.get("status_report")
+        if status is not None:
+            loc = status.get("node_location")
+            if node in self.mobile_nodes and isinstance(loc, dict):
+                try:
+                    when, where = self.geo.sim_time(str(msg["timestamp"])), self.geo.to_enu(loc)
+                except (KeyError, ValueError, TypeError, ArithmeticError):
+                    when, where = math.nan, np.full(3, np.nan)
+                if math.isfinite(when) and np.all(np.isfinite(where)):
+                    self.node_pos[node] = (when, where)
+                else:
+                    self.rejected["unreadable node position"] += 1
             return
         det = msg.get("detection_report")
         if det is None or node not in self.node_types:
             return
-        r = self._report(msg, node, det)
+        # Everything a report carries is checked before it touches a track: one not-a-number
+        # coordinate would otherwise spread through association to every track in the picture.
+        try:
+            r = self._report(msg, node, det)
+        except BadReport as e:
+            self.rejected[str(e)] += 1
+            return
+        except (KeyError, ValueError, TypeError, ArithmeticError):
+            self.rejected["unreadable report"] += 1
+            return
         if r is not None:
             self.reports += 1
             self._process(r)
@@ -205,11 +258,13 @@ class FusionNode:
             return None
         t = self.geo.sim_time(str(msg["timestamp"]))
         pos = self.geo.to_enu(loc)
+        if not (math.isfinite(t) and np.all(np.isfinite(pos))):
+            raise BadReport("position or time not finite")
         r = Report(
             t=t,
             node_id=node,
             node_type=self.node_types[node],
-            object_id=str(det.get("object_id", "")),
+            object_id=str(det.get("object_id", ""))[:MAX_ID_CHARS],
             tracking=self.node_tracking.get(node, True),
             pos=pos,
             r_pos=_sigma_cov(loc, 10.0),
@@ -217,18 +272,23 @@ class FusionNode:
         v = det.get("enu_velocity")
         if isinstance(v, dict):
             r.vel = np.array([float(v["east_rate"]), float(v["north_rate"]), float(v.get("up_rate", 0.0))])
-            s = [float(v.get(k, 2.0)) for k in ("east_rate_error", "north_rate_error", "up_rate_error")]
-            r.r_vel = np.diag(np.maximum(np.array(s), 0.1) ** 2)
+            if not np.all(np.isfinite(r.vel)) or float(np.linalg.norm(r.vel)) > MAX_SPEED_MPS:
+                raise BadReport("velocity not finite or absurd")
+            keys = ("east_rate_error", "north_rate_error", "up_rate_error")
+            r.r_vel = np.diag(np.maximum(_sigmas(v, keys, 2.0, MAX_SPEED_MPS), 0.1) ** 2)
         for c in det.get("classification") or []:
             if c.get("type") == "UAV":
-                r.p_uav = float(c.get("confidence", 0.5))
+                conf = float(c.get("confidence", 0.5))
+                if not math.isfinite(conf):
+                    raise BadReport("confidence not finite")
+                r.p_uav = min(max(conf, 0.0), 1.0)
         if det.get("id"):
-            r.remote_id = str(det["id"])
+            r.remote_id = str(det["id"])[:MAX_ID_CHARS]
         for info in det.get("track_info") or []:
             if info.get("type") == "remote_id":
-                r.remote_id = str(info.get("value"))
+                r.remote_id = str(info.get("value"))[:MAX_ID_CHARS]
             elif info.get("type") == "rf_protocol":
-                r.rf_protocol = str(info.get("value"))
+                r.rf_protocol = str(info.get("value"))[:MAX_ID_CHARS]
         return r
 
     # ------------------------------------------------------------------ filter
@@ -271,6 +331,9 @@ class FusionNode:
                     best, best_d = cand, d
             tr = best
         if tr is None:
+            if len(self.tracks) >= self.o.max_tracks:
+                self.rejected["track limit reached"] += 1
+                return
             tr = self._new(r)
         else:
             self._update(tr, r)
@@ -355,8 +418,12 @@ class FusionNode:
     def step(self, t: float) -> None:
         self.t = t
         self.tracks = [tr for tr in self.tracks if t - tr.t <= self.o.coast_s]
+        if len(self._by_source) > 4 * len(self.tracks) + 64:  # forget sensor objects of dropped tracks
+            live = {id(tr) for tr in self.tracks}
+            self._by_source = {k: tr for k, tr in self._by_source.items() if id(tr) in live}
         self._merge(t)
         cloned = self._cloned_serials(t)
+        self._mark_own(t)
         for tr in self.tracks:
             tr.identity = self._identity(tr, t)
             if tr.remote_id in cloned and tr.declared is None:
@@ -432,6 +499,38 @@ class FusionNode:
         a.merged_from.append(b.ident)
         self.merges += 1
 
+    def _mark_own(self, t: float) -> None:
+        """Recognise the tracks that are our own mobile nodes.
+
+        A ground radar sees the airborne node like any other drone. The node reports its own
+        position in its status reports, over the authenticated link, so the one track nearest
+        that position (inside a gate that grows with the report's age) is the node itself:
+        it is a friend, it is never tasked against, and it is left out of the traffic sent
+        back to that node. Only one track per node is marked, and never one the node's own
+        camera feeds, so an aircraft close to the node is still shown.
+        """
+        for tr in self.tracks:
+            tr.own_node = None
+        for node, (t_pos, pos) in self.node_pos.items():
+            age = t - t_pos
+            if age < 0.0 or age > self.o.own_fresh_s:
+                continue
+            best, best_d = None, math.inf
+            for tr in self.tracks:
+                if tr.own_node is not None or any(src == node for src, _ in tr.sources):
+                    continue
+                x, p = self._predict(tr, t)
+                sigma_h = math.sqrt(max(float(p[0, 0] + p[1, 1]), 0.0))
+                sigma_z = math.sqrt(max(float(p[2, 2]), 0.0))
+                reach = self.o.own_gate_m + self.o.own_speed_mps * age
+                d_h = float(np.linalg.norm(x[0:2] - pos[0:2]))
+                if d_h > reach + 2.0 * sigma_h or abs(float(x[2] - pos[2])) > reach + 2.0 * sigma_z:
+                    continue
+                if d_h < best_d:
+                    best, best_d = tr, d_h
+            if best is not None:
+                best.own_node = node
+
     def class_of(self, tr: RapTrack) -> str:
         if tr.p_uav >= self.o.p_uav_drone:
             return "UAV"
@@ -445,6 +544,8 @@ class FusionNode:
     def _identity(self, tr: RapTrack, t: float) -> str:
         if tr.declared is not None:
             return tr.declared
+        if tr.own_node is not None:
+            return "FRIEND"  # our own node, by its own position report
         if not self.confirmed(tr):
             return "PENDING"
         if tr.remote_id is not None and t - tr.rid_t > self.o.corroborate_s:
@@ -497,7 +598,70 @@ class FusionNode:
             )
             shown.llr, shown.remote_id, shown.identity = tr.llr, tr.remote_id, tr.identity
             shown.rf_protocol, shown.camera_t, shown.noncoop_t = tr.rf_protocol, tr.camera_t, tr.noncoop_t
+            shown.own_node = tr.own_node
             out.append(shown)
+        return out
+
+    def traffic(self, t: float, node: str | None = None) -> list[RapTrack]:
+        """The picture's tracks a mobile node should keep clear of, predicted to ``t``.
+
+        Confirmed tracks held in three dimensions (a radar or fused track, not an acoustic or
+        RF column), without the track that is ``node`` itself.
+        """
+        out = []
+        for tr in self.tracks:
+            if not self.confirmed(tr) or (node is not None and tr.own_node == node):
+                continue
+            x, p = self._predict(tr, t)
+            if (
+                p[2, 2] > self.o.traffic_max_z_sigma_m**2
+                or p[0, 0] + p[1, 1] > self.o.traffic_max_h_sigma_m**2
+            ):
+                continue
+            shown = RapTrack(tr.ident, x, p, tr.t, tr.created_t, tr.updates)
+            shown.llr, shown.identity = tr.llr, tr.identity
+            out.append(shown)
+        return out
+
+    def traffic_reports(self, t: float, node: str) -> list[Message]:
+        """:meth:`traffic` as SAPIENT detection reports from the fusion node, addressed to ``node``.
+
+        The timestamp is the time of the track's last measurement, so the receiver can widen
+        its keep-out with the age of the information.
+        """
+        out = []
+        for tr in self.traffic(t, node):
+            if tr.ident not in self._traffic_ids:
+                self._traffic_ids[tr.ident] = self.geo.new_ulid(t)
+            sigma = np.sqrt(np.clip(np.diag(tr.p), 0.0, None))
+            content: Message = {
+                "report_id": self.geo.new_ulid(t),
+                "object_id": self._traffic_ids[tr.ident],
+                "location": self.geo.location(tr.x[0:3], sigma[0:3]),
+                "enu_velocity": {
+                    "east_rate": round(float(tr.x[3]), 2),
+                    "north_rate": round(float(tr.x[4]), 2),
+                    "up_rate": round(float(tr.x[5]), 2),
+                    "east_rate_error": round(float(sigma[3]), 2),
+                    "north_rate_error": round(float(sigma[4]), 2),
+                    "up_rate_error": round(float(sigma[5]), 2),
+                },
+                "classification": [{"type": "UAV", "confidence": round(tr.p_uav, 3)}],
+                "track_info": [
+                    {"type": "identity", "value": tr.identity},
+                    {"type": "measured_at", "value": self.geo.timestamp(tr.t)},
+                ],
+            }
+            out.append(
+                {
+                    "timestamp": self.geo.timestamp(t),
+                    "node_id": self.node_id,
+                    "destination_id": node,
+                    "detection_report": content,
+                }
+            )
+        live = {tr.ident for tr in self.tracks}
+        self._traffic_ids = {k: v for k, v in self._traffic_ids.items() if k in live}
         return out
 
     def most_needed_look(self, t: float) -> RapTrack | None:

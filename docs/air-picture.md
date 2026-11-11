@@ -134,11 +134,14 @@ What the numbers say, and what the errors left are:
   seed 7010 the friendly track passed 2 m from a hostile, in 7016 the friend was within 1–2 m of
   its own track while a hostile was about 20 m away, and the assignment matched the hostile to
   the friend's track for a scan or two.
-* **Tasking Kestrel** classified the radio-silent hostile in 23 of 24 encounters against 20 of
-  24 untasked, and cut the 90th percentile from first track to *UAV* from 80 s to 46 s. On the 19
-  encounters classified both ways, tasking was faster in 7 and never slower; the median rose (7
-  to 16 s) because the encounters only tasking classified are the slow ones. The cost is
-  proximity: closest approach 12.4 m tasked against 44.6 m standing by, no run inside 12 m.
+* **Tasking Kestrel** classified the radio-silent hostile in 23 of 24 encounters against 21 of
+  24 untasked, and cut the 90th percentile from first track to *UAV* from 54 s to 34 s. On the 21
+  encounters classified both ways, tasking was faster in 3 and never slower. The cost is
+  proximity: closest approach 11.6 m tasked against 38.7 m standing by.
+* **One tasked run inside 12 m** (encounter 14: 11.6 m, 0.8 s below the limit). Kestrel was
+  not looking at anything at the time; a drone it saw, tracked and was already escaping from
+  kept closing while Kestrel fled at its top speed of 8 m/s. An aircraft that cannot outrun another
+  cannot guarantee a distance from it; the limit is stated, not tuned away on these seeds.
 * **The fault the loop found.** Before the picture shared its 3-D tracks with Kestrel, one tasked
   look flew under the hostile drone the radar held 10 m above Kestrel, out of the camera's view,
   and lost well clear for 1.5 s. With the traffic, the same encounter's closest approach is
@@ -158,10 +161,12 @@ What the numbers say, and what the errors left are:
   shown as friend. The clone rule only helps while ours is also up. A fielded system needs
   authenticated friendly-force tracking from its own ground control, not a broadcast anyone
   can copy.
-* The picture's traffic reaches Kestrel's separation filter directly in simulation, after the
-  same link check as tasking. On the wire it would be the fusion node's own detection reports
-  addressed to Kestrel; that encoding is not written yet.
-* Kestrel itself is not in the ground sensors' truth, so the radar never tracks it. A fielded
-  fusion node must recognise its own airborne node (from its status reports) and keep it out of
-  the traffic it sends back.
-* No real sensor data yet. `kestrel fuse` is the entry point for it.
+* Since v0.6 the ground sensors see Kestrel like any other drone. The fusion node recognises
+  the track nearest the position its mobile node reports about itself (within 10 m, growing
+  with the age of that report), shows it as friend, never tasks against it, and leaves it out
+  of the traffic it sends that node. Two friendly aircraft within that gate of each other can
+  be confused for one another.
+* Traffic travels as the fusion node's own SAPIENT detection reports addressed to Kestrel, in
+  simulation and live.
+* No real sensor data yet. `kestrel fuse` (offline) and `kestrel send` (to a live
+  `kestrel fusion`) are the entry points for it.

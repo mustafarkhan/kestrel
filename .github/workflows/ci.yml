@@ -19,8 +19,8 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: ruff check src tests
-      - run: ruff format --check src tests
+      - run: ruff check src tests scripts
+      - run: ruff format --check src tests scripts
       - run: mypy
 
   unit:
@@ -49,6 +49,31 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       - run: pytest -m slow
+
+  package:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build
+      - name: Install the wheel in a clean environment and use it
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/venv/bin/kestrel plan "take off to 15 m, hover for 5 seconds, then land"
+          /tmp/venv/bin/python -c "
+          from kestrel.interop import wire
+          m = {'timestamp': '2026-01-01T00:00:00Z', 'node_id': 'n', 'task_ack': {'task_id': 't', 'task_status': 'TASK_STATUS_ACCEPTED'}}
+          assert wire.decode(wire.encode(m))['task_ack']['task_id'] == 't' and not wire.violations(m)
+          print('the SAPIENT schema is in the wheel')"
+      - name: Build the container and run it
+        run: |
+          docker build -t kestrel .
+          docker run --rm kestrel plan "take off to 15 m, hover for 5 seconds, then land"
 
   sitl:
     runs-on: ubuntu-24.04

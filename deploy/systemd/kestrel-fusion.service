@@ -1,0 +1,31 @@
+# The fusion node as a service on the ground station.
+#   sudo cp deploy/systemd/kestrel-fusion.service /etc/systemd/system/
+#   sudo systemctl enable --now kestrel-fusion
+# Expects: a virtual environment at /opt/kestrel/venv, the site file and certificates under
+# /etc/kestrel (see docs/deployment.md), and a "kestrel" system user.
+[Unit]
+Description=Kestrel fusion node (SAPIENT)
+Wants=network-online.target time-sync.target
+After=network-online.target time-sync.target
+
+[Service]
+User=kestrel
+ExecStart=/opt/kestrel/venv/bin/kestrel fusion --site /etc/kestrel/site.yaml \
+  --listen 0.0.0.0:5020 --out /var/lib/kestrel/rap.jsonl --quiet --no-console \
+  --tls-ca /etc/kestrel/pki/ca.crt --tls-cert /etc/kestrel/pki/fusion.crt --tls-key /etc/kestrel/pki/fusion.key
+Restart=always
+RestartSec=2
+StateDirectory=kestrel
+# the service needs the network, its state directory and nothing else
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

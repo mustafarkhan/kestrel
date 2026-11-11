@@ -7,6 +7,7 @@ hidden as a magic number inside an algorithm.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -59,16 +60,16 @@ class ControlGains(_Strict):
 
 
 class CameraParams(_Strict):
-    width: int = 480
-    height: int = 360
-    hfov_deg: float = 75.0
+    width: int = Field(480, ge=32, le=8192)
+    height: int = Field(360, ge=32, le=8192)
+    hfov_deg: float = Field(75.0, gt=1, lt=170)
     pitch_up_deg: float = 8.0  # default tilt, up, so targets sit against sky
     gimbal: bool = True  # 2-axis stabilised (roll/pitch); yaw follows the airframe
     gimbal_min_deg: float = -30.0
     gimbal_max_deg: float = 45.0
     gimbal_rate_deg_s: float = 90.0
     gimbal_jitter_deg: float = 0.15  # residual stabilisation error
-    rate_hz: float = 10.0
+    rate_hz: float = Field(10.0, gt=0, le=240)
     # "visible" (a colour camera; targets darker than a bright sky) or "thermal" (an uncooled
     # long-wave infrared camera; warm motors and batteries brighter than a cold sky)
     band: Literal["visible", "thermal"] = "visible"
@@ -184,8 +185,33 @@ class WorldConfig(_Strict):
 
     @model_validator(mode="after")
     def _fence_ok(self) -> WorldConfig:
-        if len(self.fence) < 3:
+        """A fence that is not a plain closed polygon has no inside to keep the aircraft in."""
+        pts = [(float(x), float(y)) for x, y in self.fence]
+        n = len(pts)
+        if n < 3:
             raise ValueError("fence needs at least three vertices")
+        if not all(math.isfinite(v) for xy in pts for v in xy):
+            raise ValueError("fence vertices must be finite numbers")
+
+        def cross(o: tuple[float, float], a: tuple[float, float], b: tuple[float, float]) -> float:
+            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+        for i in range(n):
+            a, b = pts[i], pts[(i + 1) % n]
+            for j in range(i + 2, n):
+                if (j + 1) % n == i:
+                    continue  # neighbouring edges share a vertex
+                c, d = pts[j], pts[(j + 1) % n]
+                if cross(a, b, c) * cross(a, b, d) < 0 and cross(c, d, a) * cross(c, d, b) < 0:
+                    raise ValueError(f"fence edges {i} and {j} cross: list the corners in order")
+        area = 0.5 * sum(pts[i][0] * pts[(i + 1) % n][1] - pts[(i + 1) % n][0] * pts[i][1] for i in range(n))
+        if abs(area) < 100.0:
+            raise ValueError("fence encloses less than 100 square metres: check the corners")
+        lat, lon, alt = self.origin_lla
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0 and -500.0 <= alt <= 9000.0):
+            raise ValueError("origin_lla must be latitude, longitude in degrees and altitude in metres")
+        if not all(math.isfinite(v) for v in self.home):
+            raise ValueError("home must be finite")
         return self
 
 
@@ -193,28 +219,40 @@ class WorldConfig(_Strict):
 
 
 class SafetyLimits(_Strict):
-    min_altitude: float = 5.0  # AGL, enforced once airborne (not during takeoff/landing)
-    max_altitude: float = 60.0
-    max_horizontal_speed: float = 8.0
-    max_vertical_speed: float = 2.5
-    max_acceleration: float = 4.0
-    fence_margin: float = 8.0
-    min_separation: float = 12.0  # to any tracked aircraft
-    separation_margin_sigmas: float = 2.0
-    range_uncertainty_floor: float = 0.15  # size-based range is never better than this fraction
-    intruder_max_speed: float = 8.0  # for the reachable-set keep-out around unobserved tracks
-    reaction_time_s: float = 0.8  # camera latency + 4-frame track confirmation + autonomy + autopilot
-    energy_reserve_fraction: float = 0.20
-    traffic_contingency_fraction: float = 1.0  # extra plan energy held for traffic delays
-    rtl_speed: float = 6.0
-    link_loss_timeout_s: float = 5.0
+    # Every limit is range-checked when the file is read: a typo here must stop the flight
+    # before it starts, not weaken the monitor in the air.
+    min_altitude: float = Field(5.0, ge=0, le=500)  # AGL, enforced once airborne (not during takeoff/landing)
+    max_altitude: float = Field(60.0, gt=0, le=500)
+    max_horizontal_speed: float = Field(8.0, gt=0, le=40)
+    max_vertical_speed: float = Field(2.5, gt=0, le=15)
+    max_acceleration: float = Field(4.0, gt=0, le=30)
+    fence_margin: float = Field(8.0, ge=0, le=500)
+    min_separation: float = Field(12.0, gt=0, le=1000)  # to any tracked aircraft
+    separation_margin_sigmas: float = Field(2.0, ge=0, le=10)
+    # size-based range is never better than this fraction
+    range_uncertainty_floor: float = Field(0.15, ge=0, le=1)
+    # for the reachable-set keep-out around unobserved tracks
+    intruder_max_speed: float = Field(8.0, ge=0, le=100)
+    # camera latency + 4-frame track confirmation + autonomy + autopilot
+    reaction_time_s: float = Field(0.8, ge=0, le=10)
+    energy_reserve_fraction: float = Field(0.20, ge=0, lt=1)
+    # extra plan energy held for traffic delays
+    traffic_contingency_fraction: float = Field(1.0, ge=0, le=10)
+    rtl_speed: float = Field(6.0, gt=0, le=40)
+    link_loss_timeout_s: float = Field(5.0, gt=0, le=600)
     # What a lost ground link means. "rtl": return home after link_loss_timeout_s (the civil
     # default). "continue": keep flying the mission autonomously for up to link_loss_autonomy_s,
     # buffering reports, because in counter-UAS work the link is jammed exactly when the
     # sensor is needed; separation, geofence and energy limits are enforced on board either way.
     link_loss_action: Literal["rtl", "continue"] = "rtl"
-    link_loss_autonomy_s: float = 120.0
-    land_speed: float = 0.8
+    link_loss_autonomy_s: float = Field(120.0, ge=0, le=3600)
+    land_speed: float = Field(0.8, gt=0, le=5)
+
+    @model_validator(mode="after")
+    def _band_ok(self) -> SafetyLimits:
+        if self.min_altitude >= self.max_altitude:
+            raise ValueError("min_altitude must be below max_altitude")
+        return self
 
 
 # --------------------------------------------------------------------------- scenario
