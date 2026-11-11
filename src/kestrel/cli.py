@@ -182,6 +182,61 @@ def cmd_fuse(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_threats(args: argparse.Namespace) -> int:
+    from kestrel.rap.scorecard import export
+    from kestrel.rap.threats import LIBRARY_VERSION, THREATS, build
+
+    if not args.export:
+        print(f"threat library {LIBRARY_VERSION}")
+        for th in THREATS.values():
+            print(f"  {th.name:26s}{th.tests}")
+        return 0
+    if args.export not in THREATS:
+        sys.exit(f"unknown threat {args.export!r}; run 'kestrel threats' for the list")
+    out = Path(args.out or f"runs/threats/{args.export}-{args.seed}")
+    paths = export(build(args.export, args.seed), out)
+    for kind, path in paths.items():
+        print(f"{kind:8s}{path}")
+    return 0
+
+
+def cmd_scorecard(args: argparse.Namespace) -> int:
+    from kestrel.rap import scorecard as sc
+    from kestrel.rap.threats import LIBRARY_VERSION, THREATS
+
+    reference = json.loads(Path(args.reference).read_text(encoding="utf-8")) if args.reference else None
+    if args.picture:
+        if not (args.truth and args.site):
+            sys.exit(
+                "scoring a picture file needs --truth and --site (written by 'kestrel threats --export')"
+            )
+        site = json.loads(Path(args.site).read_text(encoding="utf-8"))
+        row = sc.score_files(Path(args.picture), Path(args.truth), Path(args.site))
+        name = str(site["scenario"]).rsplit("-", 1)[0]
+        if name not in THREATS:
+            sys.exit(f"site file names scenario {site['scenario']!r}, which is not in the threat library")
+        card = {
+            "threat_library": site.get("threat_library", LIBRARY_VERSION),
+            "system": args.system,
+            "seeds": [site["seed"], site["seed"]],
+            "threats": {name: sc.mean_rows([row])},
+            "runs": [{"threat": name, "seed": site["seed"], **row}],
+        }
+    else:
+        names = args.threats.split(",") if args.threats else list(THREATS)
+        unknown = [n for n in names if n not in THREATS]
+        if unknown:
+            sys.exit(f"unknown threats: {', '.join(unknown)}")
+        card = sc.run_library(names, args.seeds, args.seed0, args.jobs)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "scorecard.json").write_text(json.dumps(card, indent=1), encoding="utf-8")
+    (out / "scorecard.md").write_text(sc.markdown(card, reference), encoding="utf-8")
+    print(sc.markdown(card, reference))
+    print(f"written to {out / 'scorecard.md'} and {out / 'scorecard.json'}")
+    return 0
+
+
 def _endpoint(text: str, default_host: str = "127.0.0.1") -> tuple[str, int]:
     host, _, port = text.rpartition(":")
     return host or default_host, int(port)
@@ -456,6 +511,28 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--whitelist", help="comma-separated Remote ID serials of friendly drones")
     p.add_argument("--period", type=float, default=1.0, help="seconds between pictures")
     p.set_defaults(func=cmd_fuse)
+
+    p = sub.add_parser("threats", help="the threat library: list it, or export one situation as files")
+    p.add_argument(
+        "--export", metavar="NAME", help="write sensors.jsonl, truth.jsonl and site.json for this threat"
+    )
+    p.add_argument("--seed", type=int, default=9000)
+    p.add_argument("--out", help="output folder (default runs/threats/NAME-SEED)")
+    p.set_defaults(func=cmd_threats)
+
+    p = sub.add_parser("scorecard", help="score an air picture against the threat library")
+    p.add_argument("--picture", help="a picture file (JSON lines) from the system under test; without it, "
+                   "Kestrel's own fusion node is run on the library")  # fmt: skip
+    p.add_argument("--truth", help="truth.jsonl from 'kestrel threats --export'")
+    p.add_argument("--site", help="site.json from 'kestrel threats --export'")
+    p.add_argument("--system", default="system under test", help="name shown on the scorecard")
+    p.add_argument("--reference", help="a scorecard.json to print alongside (e.g. the published one)")
+    p.add_argument("--threats", help="comma-separated threat names (default: all)")
+    p.add_argument("--seeds", type=int, default=5, help="situations per threat")
+    p.add_argument("--seed0", type=int, default=9000)
+    p.add_argument("--jobs", type=int, default=2)
+    p.add_argument("--out", default="runs/scorecard")
+    p.set_defaults(func=cmd_scorecard)
 
     p = sub.add_parser("evaluate", help="run the detector on recorded footage with ground-truth boxes")
     p.add_argument("path", help="dataset folder")

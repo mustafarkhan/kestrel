@@ -365,6 +365,9 @@ class SensorNetConfig(_Strict):
     acoustic: GroundAcousticConfig | None = None
     whitelist: list[str] = Field(default_factory=list)  # Remote ID serials of our own drones
     protected: dict[str, Site] = Field(default_factory=dict)  # what the picture defends
+    # Sensor name ("radar", "rf", "remote_id", "acoustic") -> (start_s, end_s) windows in which it
+    # is silent: no reports and no status, as a sensor that is down, jammed or cut off looks.
+    outages: dict[Literal["radar", "rf", "remote_id", "acoustic"], list[XY]] = Field(default_factory=dict)
 
 
 class LinkLossEvent(_Strict):

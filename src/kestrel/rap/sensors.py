@@ -449,6 +449,10 @@ class SensorNetwork:
             else None
         )
         self.registered = False
+        self.outages: dict[str, list[tuple[float, float]]] = {k: list(v) for k, v in cfg.outages.items()}
+
+    def _down(self, name: str, t: float) -> bool:
+        return any(a <= t < b for a, b in self.outages.get(name, []))
 
     def step(self, t: float, objects: list[TruthObject]) -> list[Message]:
         start = len(self.out)
@@ -456,15 +460,23 @@ class SensorNetwork:
             for n in self.nodes:
                 n.register(t)
             self.registered = True
-        for n in self.nodes:
-            if t - n.last_status_t >= 5.0:
-                n.status(t, None)
-        if self.radar is not None:
-            self.radar.scan(t, objects)
-        if self.rf is not None:
-            self.rf.sense(t, objects, self.band)
-        if self.rid is not None:
-            self.rid.sense(t, objects)
-        if self.acoustic is not None:
-            self.acoustic.sense(t, objects, self.band)
+        sensors = (
+            ("radar", self.radar),
+            ("rf", self.rf),
+            ("remote_id", self.rid),
+            ("acoustic", self.acoustic),
+        )
+        for name, sensor in sensors:
+            if sensor is None or self._down(name, t):
+                continue  # a sensor that is down sends nothing, not even its status
+            if t - sensor.node.last_status_t >= 5.0:
+                sensor.node.status(t, None)
+            if name == "radar":
+                self.radar.scan(t, objects)  # type: ignore[union-attr]
+            elif name == "rf":
+                self.rf.sense(t, objects, self.band)  # type: ignore[union-attr]
+            elif name == "remote_id":
+                self.rid.sense(t, objects)  # type: ignore[union-attr]
+            else:
+                self.acoustic.sense(t, objects, self.band)  # type: ignore[union-attr]
         return self.out[start:]
