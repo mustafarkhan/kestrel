@@ -60,7 +60,7 @@ Rendered only from the repository's own outputs by [`docs/video/make_video.py`](
 | **Fly a real autopilot** | ArduPilot GUIDED over MAVLink (pymavlink); pre-flight checks, typed arming confirmation, pilot takeover, flight recorder | full mission flown on **ArduCopter 4.6.3 SITL in CI**; the flight loop tested on a bench vehicle with camera, fusion link and faults |
 | **Run as a service** | `kestrel fusion`: the benchmarked fusion node behind a SAPIENT TCP server with mutual TLS; sensor health; operator declarations; Cursor on Target for ATAK/WinTAK; container and service unit | real sockets in the tests, compared against the direct result; hostile peers, bad clocks and off-site reports rejected |
 
-> **Status (November 2026, v0.6).** Ready for integration testing, not fielded: technology readiness level 4.
+> **Status (November 2026, v0.7).** Ready for integration testing, not fielded: technology readiness level 4.
 > Everything here runs in simulation, on a bench and on ArduCopter SITL. It has **not flown on a real airframe**,
 > has not been evaluated on real air-to-air footage or real sensor feeds, and nothing is flight-qualified or
 > certified. The camera, bird, aircraft and ground-sensor models are simplified. The known gaps are under [Limitations](#limitations), in
@@ -356,7 +356,7 @@ Problems found in simulation and fixed, with before/after measurements, are writ
 | job | what | runs |
 |---|---|---|
 | `lint` | ruff, ruff format, mypy `--strict` | every push |
-| `unit` | 179 tests incl. malformed sensor reports and operator files refused, the SAPIENT wire format (framing fuzzed, mandatory fields, mutual TLS), the fusion service over real sockets, the flight loop on a bench vehicle with faults injected (pilot takeover, silent autopilot, dead camera), pre-flight checks from the command line, property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, night and thermal detection, the real-data evaluation harness in three layouts, SAPIENT messages parsed against the published v2.0 schema, UTM against PROJ, sensor blind spots, fusion consistency, friend/spoof/clone identification, LLM planner against a local HTTP server, README tables against the committed results | Python 3.11, 3.12, 3.13 |
+| `unit` | 192 tests incl. the threat library and the scorecard (a picture scored from files agrees with the direct run), malformed sensor reports and operator files refused, the SAPIENT wire format (framing fuzzed, mandatory fields, mutual TLS), the fusion service over real sockets, the flight loop on a bench vehicle with faults injected (pilot takeover, silent autopilot, dead camera), pre-flight checks from the command line, property-based safety invariants (Hypothesis), rendered-frame perception and bird/drone checks, night and thermal detection, the real-data evaluation harness in three layouts, SAPIENT messages parsed against the published v2.0 schema, UTM against PROJ, sensor blind spots, fusion consistency, friend/spoof/clone identification, LLM planner against a local HTTP server, README tables against the committed results | Python 3.11, 3.12, 3.13 |
 | `closed-loop` | full-stack simulations: detect, track and keep separation; operator abort; link-loss failsafe; rejected plans never fly | every push |
 | `sitl` | builds ArduCopter 4.6.3 SITL (cached) and flies a mission through GUIDED mode | every push |
 | `package` | builds the wheel, installs it in a clean environment and uses it; builds and runs the container | every push |
@@ -419,7 +419,7 @@ src/kestrel/
   runtime.py    closed-loop simulation      team.py   several observers, one fused picture
   live.py       real-time flight loop       preflight.py   checks before arming
   bench.py      Monte Carlo benchmark       cli.py    kestrel plan | sim | bench | picture | fuse | fusion | send |
-                                                      evaluate | preflight | fly
+                                                      threats | scorecard | evaluate | preflight | fly
 deploy/         private CA script, systemd unit        sites/    site file template        Dockerfile
 docs/           concept of operations, architecture, safety case, field test plan, research
                 and standards map, SAPIENT mapping, decision records, published results, video and its renderer
@@ -431,6 +431,26 @@ scenarios/      airfield, airfield by night, airfield with birds, harbour (sea s
 third_party/    Dstl's SAPIENT protobuf schema (Apache-2.0), for the conformance test
 tests/          unit, property, closed-loop and SITL tests
 ```
+
+## Testing another system: the threat library and the scorecard
+
+Kestrel's simulator, sensors and scoring are also a yardstick for other systems. A library of nine named threat
+situations (silent low drones, a one-way attack, saturation, decoys, Remote ID spoofing and impersonation, birds
+only, a radar outage, a mixed raid) can be exported as sensor traffic and ground truth, and any system's air
+picture scored against it with the same measures ([docs/scorecard.md](docs/scorecard.md)).
+
+```bash
+kestrel threats                                   # the library
+kestrel threats --export silent-low --seed 9000   # one situation as files for a system under test
+kestrel scorecard --picture their_picture.jsonl --truth truth.jsonl --site site.json \
+    --reference docs/results/scorecard/scorecard.json
+```
+
+The published reference is Kestrel's own fusion node on the library
+([scorecard](docs/results/scorecard/scorecard.md)). It shows Kestrel's weaknesses as plainly as its strengths: in
+`remote-id-impersonation` a hostile broadcasting a grounded friend's serial from its own true position is shown as
+a friend for most of its flight, and in `silent-low` a third of hostile drone-time goes untracked. There is no
+pass mark: the same measures on the same situations, next to a reference, are what two parties can read alike.
 
 ## Contributing
 

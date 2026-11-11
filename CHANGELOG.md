@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 (2026-11-12)
+
+A yardstick for other systems.
+
+- Threat library 1.0: nine named, seeded situations (`kestrel threats`), exportable as SAPIENT
+  sensor traffic, ground truth and a site description.
+- `kestrel scorecard`: any system's air picture, as a JSON-lines file, scored against the
+  truth with the benchmark's measures; Kestrel's own result published as the reference,
+  weaknesses included ([docs/scorecard.md](docs/scorecard.md)).
+- Ground sensors can be given outage windows.
+
 ## 0.6.0 (2026-11-11)
 
 Ready for integration testing: the code that was measured in simulation now runs outside it.
