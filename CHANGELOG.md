@@ -3,8 +3,7 @@
 ## 0.6.0 (2026-11-11)
 
 Ready for integration testing: the code that was measured in simulation now runs outside it.
-[docs/readiness.md](docs/readiness.md) lists each gap closed, with the test that guards it,
-and everything still open.
+What is still open is under Limitations in the README.
 
 - SAPIENT on the wire: protobuf encoding from Dstl's schema, mandatory-field validation,
   length-prefixed framing, TCP client and server with mutual TLS 1.3. Four mandatory-field

@@ -1197,7 +1197,7 @@ def slide_fieldable() -> list[Image.Image]:
                 fill=INK2,
                 font=sans(21),
             )
-        footer(d, "23 gaps closed, each guarded by a test or CI job; every open item and who closes it: docs/readiness.md")
+        footer(d, "every item guarded by a test or CI job; the way to the first flight: docs/field-test-plan.md")
         return im
 
     return list(faded(hold(r, 12.0)))

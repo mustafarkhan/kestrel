@@ -21,8 +21,7 @@ crafted input.
 
 The threat model, the defences and the gaps that are known and documented (Remote ID is
 not authenticated, the MAVLink link is not signed by Kestrel, no certificate revocation,
-reliance on GNSS) are in [docs/security.md](docs/security.md) and
-[docs/readiness.md](docs/readiness.md). Reports that go beyond those are especially
+reliance on GNSS) are in [docs/security.md](docs/security.md). Reports that go beyond those are especially
 welcome.
 
 ## Supported versions
